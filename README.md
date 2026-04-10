@@ -6,7 +6,7 @@ Chat with Claude about your Obsidian notes. Works on Mac, iPhone, and iPad.
 
 ## Installation
 
-### Mac (direct)
+### Mac (direct) - Assuming you have the vault in iCloud
 
 1. In Finder, go to your vault folder → `.obsidian/plugins/`
 2. Create a folder named `vault-assistant`
@@ -77,3 +77,11 @@ Just type naturally. Examples:
 
 - On iOS, after installing or updating the plugin, close and reopen Obsidian to activate it
 - The plugin uses the Obsidian mobile API — no Node.js or Electron dependencies
+
+## Disclaimer
+
+This plugin sends your note content to Anthropic's API to generate responses.
+By using it you accept Anthropic's [Terms of Service](https://www.anthropic.com/policies/usage).
+Your API key is stored locally on your device. The author takes no responsibility
+for data sent to third-party services or API costs incurred.
+The author has no responsibility for data loss or any misuse. Make sure you understande all the implication of using this plugin. 
