@@ -11,6 +11,7 @@ const {
     Modal,
     Notice,
     requestUrl,
+    MarkdownRenderer,
 } = require('obsidian');
 
 const VIEW_TYPE = 'vault-assistant-view';
@@ -19,6 +20,7 @@ const DEFAULT_SETTINGS = {
     apiKey: '',
     model: 'claude-sonnet-4-6',
     maxTokens: 2048,
+    savedNotesFolder: '',
 };
 
 // ─── Main Plugin ────────────────────────────────────────────────────────────
@@ -70,7 +72,8 @@ class VaultAssistantView extends ItemView {
         super(leaf);
         this.plugin = plugin;
         this.messages = []; // { role: 'user' | 'assistant', content: string }
-        this.scope = 'note'; // 'note' | 'folder' | 'parent' | 'vault'
+        this.scope = 'note';       // 'note' | 'folder' | 'vault'
+        this.folderPath = null;    // string path when scope === 'folder'
     }
 
     getViewType()    { return VIEW_TYPE; }
@@ -87,7 +90,7 @@ class VaultAssistantView extends ItemView {
         root.empty();
         root.addClass('va-root');
 
-        this.buildScopeSelector(root);
+        this.buildTopBar(root);
         this.messagesEl = root.createDiv('va-messages');
         this.buildInputArea(root);
 
@@ -96,26 +99,63 @@ class VaultAssistantView extends ItemView {
         this.scrollToBottom();
     }
 
-    buildScopeSelector(parent) {
-        const bar = parent.createDiv('va-scope-bar');
-        const scopes = [
-            { id: 'note',   label: 'Note'   },
-            { id: 'folder', label: 'Folder' },
-            { id: 'parent', label: 'Parent' },
-            { id: 'vault',  label: 'Vault'  },
-        ];
+    buildTopBar(parent) {
+        const bar = parent.createDiv('va-top-bar');
+        this.scopeBarEl = bar;
+        this.buildScopeSelector(bar);
+        const clearBtn = bar.createEl('button', { text: '✕', cls: 'va-clear-btn', attr: { title: 'Clear conversation' } });
+        clearBtn.addEventListener('click', () => this.clearMessages());
+    }
 
-        scopes.forEach(({ id, label }) => {
-            const btn = bar.createEl('button', {
-                text: label,
-                cls: 'va-scope-btn' + (id === this.scope ? ' va-scope-active' : ''),
-            });
-            btn.addEventListener('click', () => {
-                this.scope = id;
-                bar.querySelectorAll('.va-scope-btn').forEach(b => b.removeClass('va-scope-active'));
-                btn.addClass('va-scope-active');
-            });
+    buildScopeSelector(bar) {
+        // Note
+        bar.createEl('button', {
+            text: 'Note',
+            cls: 'va-scope-btn' + (this.scope === 'note' ? ' va-scope-active' : ''),
+        }).addEventListener('click', () => this.setScope('note', null));
+
+        // Folder ▾ — opens picker
+        this.folderScopeBtn = bar.createEl('button', {
+            text: this.scope === 'folder' && this.folderPath !== null
+                ? this.truncateFolderLabel(this.folderPath)
+                : 'Folder ▾',
+            cls: 'va-scope-btn va-scope-btn-folder' + (this.scope === 'folder' ? ' va-scope-active' : ''),
         });
+        this.folderScopeBtn.addEventListener('click', () => {
+            const active = this.app.workspace.getActiveFile();
+            if (!active?.parent) { new Notice('Open a note first.'); return; }
+            new FolderScopeModal(this.app, this).open();
+        });
+
+        // Vault
+        bar.createEl('button', {
+            text: 'Vault',
+            cls: 'va-scope-btn' + (this.scope === 'vault' ? ' va-scope-active' : ''),
+        }).addEventListener('click', () => this.setScope('vault', null));
+    }
+
+    setScope(scope, folderPath) {
+        this.scope      = scope;
+        this.folderPath = folderPath;
+
+        if (!this.scopeBarEl) return;
+        const btns = this.scopeBarEl.querySelectorAll('.va-scope-btn');
+        btns.forEach(b => b.removeClass('va-scope-active'));
+        if (scope === 'note')    btns[0]?.addClass('va-scope-active');
+        if (scope === 'folder')  btns[1]?.addClass('va-scope-active');
+        if (scope === 'vault')   btns[2]?.addClass('va-scope-active');
+
+        if (this.folderScopeBtn) {
+            this.folderScopeBtn.textContent = scope === 'folder' && folderPath !== null
+                ? this.truncateFolderLabel(folderPath)
+                : 'Folder ▾';
+        }
+    }
+
+    truncateFolderLabel(path) {
+        if (path === '' || path === '/') return '/ root ▾';
+        const name = path.split('/').pop() || path;
+        return (name.length > 10 ? name.slice(0, 9) + '…' : name) + ' ▾';
     }
 
     buildInputArea(parent) {
@@ -195,23 +235,20 @@ class VaultAssistantView extends ItemView {
         if (this.scope === 'note') {
             if (active) files = [active];
         } else if (this.scope === 'folder') {
-            if (active?.parent) {
-                const folder = active.parent;
-                files = vault.getMarkdownFiles().filter(f => f.parent?.path === folder.path);
-            }
-        } else if (this.scope === 'parent') {
-            if (active?.parent?.parent) {
-                const parentPath = active.parent.parent.path;
-                files = vault.getMarkdownFiles().filter(f => f.path.startsWith(parentPath + '/'));
-            } else if (active?.parent) {
-                files = vault.getMarkdownFiles().filter(f => f.parent?.path === active.parent.path);
+            const fp = this.folderPath ?? active?.parent?.path ?? null;
+            if (fp === '' || fp === '/') {
+                files = vault.getMarkdownFiles();
+            } else if (fp !== null) {
+                files = vault.getMarkdownFiles().filter(f => f.path.startsWith(fp + '/'));
             }
         } else if (this.scope === 'vault') {
             files = vault.getMarkdownFiles();
         }
 
         const CHAR_LIMIT = 50000;
-        const scopeLabel = this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
+        const scopeLabel = this.scope === 'folder' && this.folderPath
+            ? this.folderPath.split('/').pop() || 'root'
+            : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
         let context = `[VAULT SCOPE - ${scopeLabel}]\n`;
         let total = 0;
         let truncated = false;
@@ -292,8 +329,14 @@ ${context}`;
         });
 
         if (res.status < 200 || res.status >= 300) {
-            let errMsg = `HTTP ${res.status}`;
-            try { errMsg = res.json?.error?.message || errMsg; } catch {}
+            let errMsg;
+            try { errMsg = res.json?.error?.message; } catch {}
+            if (!errMsg) {
+                if (res.status === 401) errMsg = 'Invalid API key. Check your key in plugin settings.';
+                else if (res.status === 429) errMsg = 'Rate limit reached. Wait a moment and try again.';
+                else if (res.status === 529) errMsg = 'Anthropic is overloaded. Try again in a few seconds.';
+                else errMsg = `HTTP ${res.status}`;
+            }
             throw new Error(errMsg);
         }
 
@@ -323,10 +366,34 @@ ${context}`;
         const displayText   = editBlock ? this.stripEditBlock(msg.content) : msg.content;
 
         const bubble = wrapper.createDiv('va-bubble ' + (isUser ? 'va-user-bubble' : 'va-assistant-bubble'));
-        bubble.createDiv({ cls: 'va-bubble-text', text: displayText });
+
+        if (isUser) {
+            bubble.createDiv({ cls: 'va-bubble-text', text: displayText });
+        } else {
+            const mdEl = bubble.createDiv('va-bubble-text va-markdown');
+            MarkdownRenderer.render(this.app, displayText, mdEl, '', this);
+        }
 
         if (!isUser && withActions) {
             const actionsEl = wrapper.createDiv('va-actions');
+
+            // Copy button always available on assistant messages
+            const copyBtn = actionsEl.createEl('button', { text: 'Copy', cls: 'va-btn va-btn-copy' });
+            copyBtn.addEventListener('click', () => {
+                const confirm = () => {
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+                };
+                if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(displayText).then(confirm).catch(() => {
+                        this.fallbackCopy(displayText);
+                        confirm();
+                    });
+                } else {
+                    this.fallbackCopy(displayText);
+                    confirm();
+                }
+            });
 
             if (editBlock) {
                 // Show Apply / Discard for file edits
@@ -413,8 +480,13 @@ ${context}`;
 
     async saveAsNote(content) {
         const ts = new Date().toISOString().slice(0, 16).replace('T', '_').replaceAll(':', '-');
-        const path = `Claude Note ${ts}.md`;
+        const folder = this.plugin.settings.savedNotesFolder;
+        const filename = `Claude Note ${ts}.md`;
+        const path = folder ? `${folder}/${filename}` : filename;
         try {
+            if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
+                await this.app.vault.createFolder(folder);
+            }
             await this.app.vault.create(path, content);
             new Notice('Saved: ' + path);
         } catch (err) {
@@ -436,10 +508,21 @@ ${context}`;
         new ConfirmModal(this.app, `Replace the full content of "${active.name}"?`, async () => {
             await this.app.vault.modify(active, content);
             new Notice('Replaced: ' + active.name);
-        }).open();
+        }, 'Replace').open();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fallbackCopy(text) {
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        try { document.execCommand('copy'); } catch {}
+        document.body.removeChild(el);
+    }
 
     scrollToBottom() {
         setTimeout(() => { this.messagesEl.scrollTop = this.messagesEl.scrollHeight; }, 50);
@@ -452,13 +535,72 @@ ${context}`;
     }
 }
 
+// ─── Folder Scope Modal ───────────────────────────────────────────────────────
+
+class FolderScopeModal extends Modal {
+    constructor(app, view) {
+        super(app);
+        this.view = view;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('p', { text: 'Select which folder Claude can see', cls: 'va-modal-msg va-folder-modal-title' });
+
+        const active = this.app.workspace.getActiveFile();
+        if (!active?.parent) {
+            contentEl.createEl('p', { text: 'Open a note first.', cls: 'va-modal-msg' });
+            return;
+        }
+
+        // Walk up the folder tree from the file's parent to root
+        const levels = [];
+        let folder = active.parent;
+        while (folder) {
+            levels.push(folder);
+            folder = folder.parent;
+        }
+
+        const allFiles = this.app.vault.getMarkdownFiles();
+        const list = contentEl.createDiv('va-folder-list');
+
+        levels.forEach((f, i) => {
+            const isRoot   = f.path === '' || f.path === '/';
+            const path     = isRoot ? '' : f.path;
+            const name     = isRoot ? 'Vault root' : f.name || f.path;
+            const depth    = levels.length - 1 - i; // 0 = deepest (file's direct parent)
+            const count    = isRoot
+                ? allFiles.length
+                : allFiles.filter(file => file.path.startsWith(path + '/')).length;
+            const isActive = this.view.folderPath === path;
+
+            const item = list.createDiv('va-folder-item' + (isActive ? ' va-folder-item-active' : ''));
+
+            // Indentation dots to show depth visually
+            if (depth > 0) item.createSpan({ text: '  '.repeat(depth) + '↳ ', cls: 'va-folder-indent' });
+
+            item.createSpan({ text: '📁 ' + name, cls: 'va-folder-name' });
+            item.createSpan({ text: ` ${count} note${count !== 1 ? 's' : ''}`, cls: 'va-folder-count' });
+
+            item.addEventListener('click', () => {
+                this.view.setScope('folder', path);
+                this.close();
+            });
+        });
+    }
+
+    onClose() { this.contentEl.empty(); }
+}
+
 // ─── Confirm Modal ────────────────────────────────────────────────────────────
 
 class ConfirmModal extends Modal {
-    constructor(app, message, onConfirm) {
+    constructor(app, message, onConfirm, confirmLabel = 'Delete') {
         super(app);
         this.message = message;
         this.onConfirm = onConfirm;
+        this.confirmLabel = confirmLabel;
     }
 
     onOpen() {
@@ -467,8 +609,8 @@ class ConfirmModal extends Modal {
 
         const btns = contentEl.createDiv('va-modal-btns');
 
-        const cancelBtn  = btns.createEl('button', { text: 'Cancel',  cls: 'va-btn' });
-        const confirmBtn = btns.createEl('button', { text: 'Delete',  cls: 'va-btn va-btn-danger' });
+        const cancelBtn  = btns.createEl('button', { text: 'Cancel',          cls: 'va-btn' });
+        const confirmBtn = btns.createEl('button', { text: this.confirmLabel, cls: 'va-btn va-btn-danger' });
 
         cancelBtn.addEventListener('click',  () => this.close());
         confirmBtn.addEventListener('click', () => { this.onConfirm(); this.close(); });
@@ -494,13 +636,15 @@ class VaultAssistantSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName('Anthropic API Key')
             .setDesc('Get yours at console.anthropic.com. Stored locally only.')
-            .addText(text => text
-                .setPlaceholder('sk-ant-...')
-                .setValue(this.plugin.settings.apiKey)
-                .onChange(async (v) => {
-                    this.plugin.settings.apiKey = v.trim();
-                    await this.plugin.saveSettings();
-                }));
+            .addText(text => {
+                text.setPlaceholder('sk-ant-...')
+                    .setValue(this.plugin.settings.apiKey)
+                    .onChange(async (v) => {
+                        this.plugin.settings.apiKey = v.trim();
+                        await this.plugin.saveSettings();
+                    });
+                text.inputEl.type = 'password';
+            });
 
         // Model
         new Setting(containerEl)
@@ -517,13 +661,25 @@ class VaultAssistantSettingTab extends PluginSettingTab {
         // Max tokens
         new Setting(containerEl)
             .setName('Max Tokens')
-            .setDesc('Maximum length of Claude\'s response (256 – 4096).')
+            .setDesc('Maximum length of Claude\'s response (256 – 8192).')
             .addSlider(slider => slider
-                .setLimits(256, 4096, 256)
+                .setLimits(256, 8192, 256)
                 .setValue(this.plugin.settings.maxTokens)
                 .setDynamicTooltip()
                 .onChange(async (v) => {
                     this.plugin.settings.maxTokens = v;
+                    await this.plugin.saveSettings();
+                }));
+
+        // Saved notes folder
+        new Setting(containerEl)
+            .setName('Saved Notes Folder')
+            .setDesc('Folder where "Save as note" creates files. Leave empty for vault root.')
+            .addText(text => text
+                .setPlaceholder('e.g. AI Notes')
+                .setValue(this.plugin.settings.savedNotesFolder)
+                .onChange(async (v) => {
+                    this.plugin.settings.savedNotesFolder = v.trim();
                     await this.plugin.saveSettings();
                 }));
 

@@ -138,7 +138,6 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .DS_Store
-.DS_Store
-.DS_Store
-.DS_Store
-.DS_Store
+
+# Never commit plugin data — contains the user's Anthropic API key
+data.json

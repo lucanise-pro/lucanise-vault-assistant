@@ -12,15 +12,45 @@
     background: var(--background-primary);
 }
 
-/* ─── Scope Selector ────────────────────────────────────────────────────────── */
+/* ─── Top Bar (scope + clear) ───────────────────────────────────────────────── */
 
-.va-scope-bar {
+.va-top-bar {
     display: flex;
+    align-items: center;
     gap: 4px;
     padding: 8px 10px;
     border-bottom: 1px solid var(--background-modifier-border);
     background: var(--background-secondary);
     flex-shrink: 0;
+}
+
+.va-scope-bar {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+}
+
+.va-clear-btn {
+    flex-shrink: 0;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0;
+    font-size: 16px;
+    font-weight: 600;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    background: var(--background-primary);
+    color: var(--text-muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-appearance: none;
+    touch-action: manipulation;
+    transition: background 0.15s, color 0.15s;
+}
+
+.va-clear-btn:active {
+    background: var(--background-modifier-error);
+    color: var(--text-error);
 }
 
 .va-scope-btn {
@@ -36,6 +66,8 @@
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    -webkit-appearance: none;
 }
 
 .va-scope-btn:active {
@@ -106,6 +138,26 @@
     white-space: pre-wrap;
 }
 
+/* Markdown rendered inside assistant bubbles */
+.va-markdown {
+    white-space: normal;
+}
+
+.va-markdown p      { margin: 0 0 8px; }
+.va-markdown p:last-child { margin-bottom: 0; }
+.va-markdown ul,
+.va-markdown ol     { margin: 4px 0 8px 18px; padding: 0; }
+.va-markdown li     { margin-bottom: 2px; }
+.va-markdown h1,
+.va-markdown h2,
+.va-markdown h3     { margin: 10px 0 4px; font-size: 1em; font-weight: 600; }
+.va-markdown code   { font-size: 12px; background: var(--background-primary); border-radius: 4px; padding: 1px 5px; }
+.va-markdown pre    { background: var(--background-primary); border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+.va-markdown pre code { background: none; padding: 0; }
+.va-markdown blockquote { border-left: 3px solid var(--interactive-accent); margin: 6px 0; padding-left: 10px; color: var(--text-muted); }
+.va-markdown strong { font-weight: 600; }
+.va-markdown a      { color: var(--link-color, var(--interactive-accent)); }
+
 /* ─── Action Buttons ────────────────────────────────────────────────────────── */
 
 .va-actions {
@@ -126,6 +178,8 @@
     color: var(--text-normal);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
+    -webkit-appearance: none;
+    touch-action: manipulation;
     transition: opacity 0.15s;
 }
 
@@ -150,6 +204,13 @@
     color: var(--text-warning, var(--color-orange));
     border-color: var(--color-orange);
     opacity: 0.85;
+}
+
+.va-btn-copy {
+    color: var(--text-muted);
+    font-size: 12px;
+    min-height: 44px;
+    padding: 0 12px;
 }
 
 .va-status-label {
@@ -205,6 +266,7 @@
     align-items: flex-end;
     gap: 8px;
     padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--background-modifier-border);
     background: var(--background-secondary);
     flex-shrink: 0;
@@ -215,7 +277,7 @@
     min-height: 44px;
     max-height: 120px;
     padding: 10px 12px;
-    font-size: 14px;
+    font-size: 16px; /* 16px minimum prevents iOS auto-zoom on focus */
     font-family: inherit;
     line-height: 1.4;
     border: 1px solid var(--background-modifier-border);
@@ -225,6 +287,7 @@
     resize: none;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    -webkit-appearance: none;
     transition: border-color 0.15s;
 }
 
@@ -250,6 +313,8 @@
     cursor: pointer;
     flex-shrink: 0;
     -webkit-tap-highlight-color: transparent;
+    -webkit-appearance: none;
+    touch-action: manipulation;
     transition: opacity 0.15s;
 }
 
@@ -275,4 +340,67 @@
 
 .va-modal-btns .va-btn {
     min-width: 80px;
+}
+
+/* ─── Folder Scope Modal ─────────────────────────────────────────────────────── */
+
+.va-folder-modal-title {
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.va-folder-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.va-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.12s;
+}
+
+.va-folder-item:active {
+    background: var(--background-modifier-hover);
+}
+
+.va-folder-item-active {
+    background: var(--interactive-accent-hover, rgba(var(--interactive-accent-rgb), 0.15));
+    border: 1px solid var(--interactive-accent);
+}
+
+.va-folder-indent {
+    color: var(--text-faint);
+    font-size: 12px;
+    white-space: pre;
+}
+
+.va-folder-name {
+    flex: 1;
+    font-size: 14px;
+    color: var(--text-normal);
+    font-weight: 500;
+}
+
+.va-folder-item-active .va-folder-name {
+    color: var(--interactive-accent);
+}
+
+.va-folder-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+/* Wider scope button to fit "FolderName ▾" */
+.va-scope-btn-folder {
+    flex: 1.4;
 }
