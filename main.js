@@ -12,6 +12,7 @@ const {
     Notice,
     requestUrl,
     MarkdownRenderer,
+    TFolder,
 } = require('obsidian');
 
 const VIEW_TYPE = 'vault-assistant-view';
@@ -23,22 +24,18 @@ const DEFAULT_SETTINGS = {
     savedNotesFolder: '',
 };
 
-// ─── Main Plugin ────────────────────────────────────────────────────────────
+// ─── Main Plugin ─────────────────────────────────────────────────────────────
 
 class VaultAssistantPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
-
         this.registerView(VIEW_TYPE, (leaf) => new VaultAssistantView(leaf, this));
-
         this.addRibbonIcon('message-circle', 'Vault Assistant', () => this.activateView());
-
         this.addCommand({
             id: 'open-vault-assistant',
             name: 'Open Vault Assistant',
             callback: () => this.activateView(),
         });
-
         this.addSettingTab(new VaultAssistantSettingTab(this.app, this));
     }
 
@@ -65,91 +62,137 @@ class VaultAssistantPlugin extends Plugin {
     }
 }
 
-// ─── Chat View ───────────────────────────────────────────────────────────────
+// ─── Chat View ────────────────────────────────────────────────────────────────
 
 class VaultAssistantView extends ItemView {
     constructor(leaf, plugin) {
         super(leaf);
-        this.plugin = plugin;
-        this.messages = []; // { role: 'user' | 'assistant', content: string }
-        this.scope = 'note';       // 'note' | 'folder' | 'vault'
-        this.folderPath = null;    // string path when scope === 'folder'
+        this.plugin    = plugin;
+        this.messages  = [];
+        this.scope     = 'note';
+        this.folderPath = null;
     }
 
     getViewType()    { return VIEW_TYPE; }
     getDisplayText() { return 'Vault Assistant'; }
     getIcon()        { return 'message-circle'; }
 
-    async onOpen()  { this.buildUI(); }
+    async onOpen() {
+        this.buildUI();
+        // Update scope hint whenever the user navigates to a different note
+        this.registerEvent(
+            this.app.workspace.on('file-open', () => this.updateScopeHint())
+        );
+    }
+
     async onClose() {}
 
-    // ── UI Construction ──────────────────────────────────────────────────────
+    // ── UI ────────────────────────────────────────────────────────────────────
 
     buildUI() {
         const root = this.containerEl.children[1];
         root.empty();
         root.addClass('va-root');
 
-        this.buildTopBar(root);
+        this.buildHeader(root);
         this.messagesEl = root.createDiv('va-messages');
         this.buildInputArea(root);
 
-        // Restore previous messages (no action buttons on old messages)
         this.messages.forEach(msg => this.renderMessage(msg, false));
         this.scrollToBottom();
     }
 
-    buildTopBar(parent) {
-        const bar = parent.createDiv('va-top-bar');
+    buildHeader(parent) {
+        // Top bar: segmented scope control + clear button
+        const bar = parent.createDiv('va-header');
         this.scopeBarEl = bar;
-        this.buildScopeSelector(bar);
-        const clearBtn = bar.createEl('button', { text: '✕', cls: 'va-clear-btn', attr: { title: 'Clear conversation' } });
-        clearBtn.addEventListener('click', () => this.clearMessages());
-    }
 
-    buildScopeSelector(bar) {
-        // Note
-        bar.createEl('button', {
+        const seg = bar.createDiv('va-segment');
+
+        // Note button
+        const noteBtn = seg.createEl('button', {
             text: 'Note',
-            cls: 'va-scope-btn' + (this.scope === 'note' ? ' va-scope-active' : ''),
-        }).addEventListener('click', () => this.setScope('note', null));
+            cls: 'va-seg-btn' + (this.scope === 'note' ? ' va-seg-active' : ''),
+        });
+        noteBtn.addEventListener('click', () => this.setScope('note', null));
 
-        // Folder ▾ — opens picker
-        this.folderScopeBtn = bar.createEl('button', {
+        // Folder button — opens full tree picker
+        this.folderScopeBtn = seg.createEl('button', {
             text: this.scope === 'folder' && this.folderPath !== null
                 ? this.truncateFolderLabel(this.folderPath)
                 : 'Folder ▾',
-            cls: 'va-scope-btn va-scope-btn-folder' + (this.scope === 'folder' ? ' va-scope-active' : ''),
+            cls: 'va-seg-btn va-seg-btn-folder' + (this.scope === 'folder' ? ' va-seg-active' : ''),
         });
         this.folderScopeBtn.addEventListener('click', () => {
-            const active = this.app.workspace.getActiveFile();
-            if (!active?.parent) { new Notice('Open a note first.'); return; }
             new FolderScopeModal(this.app, this).open();
         });
 
-        // Vault
-        bar.createEl('button', {
+        // Vault button
+        const vaultBtn = seg.createEl('button', {
             text: 'Vault',
-            cls: 'va-scope-btn' + (this.scope === 'vault' ? ' va-scope-active' : ''),
-        }).addEventListener('click', () => this.setScope('vault', null));
+            cls: 'va-seg-btn' + (this.scope === 'vault' ? ' va-seg-active' : ''),
+        });
+        vaultBtn.addEventListener('click', () => this.setScope('vault', null));
+
+        // Clear button (trash icon)
+        const clearBtn = bar.createEl('button', {
+            cls: 'va-clear-btn',
+            attr: { title: 'Clear conversation', 'aria-label': 'Clear conversation' },
+        });
+        clearBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>`;
+        clearBtn.addEventListener('click', () => this.clearMessages());
+
+        // Scope hint line — updates on file change
+        this.scopeHintEl = parent.createDiv('va-scope-hint');
+        this.updateScopeHint();
+    }
+
+    updateScopeHint() {
+        if (!this.scopeHintEl) return;
+        const active = this.app.workspace.getActiveFile();
+
+        if (this.scope === 'note') {
+            this.scopeHintEl.textContent = active ? `📄 ${active.name}` : 'No note open';
+        } else if (this.scope === 'folder') {
+            if (!this.folderPath) {
+                this.scopeHintEl.textContent = active?.parent
+                    ? `📁 ${active.parent.path || 'root'}`
+                    : '📁 No folder';
+            } else {
+                const count = this.app.vault.getMarkdownFiles()
+                    .filter(f => this.folderPath === ''
+                        ? true
+                        : f.path.startsWith(this.folderPath + '/'))
+                    .length;
+                this.scopeHintEl.textContent = `📁 ${this.folderPath || 'Vault root'} · ${count} notes`;
+            }
+        } else {
+            const count = this.app.vault.getMarkdownFiles().length;
+            this.scopeHintEl.textContent = `🗄 Entire vault · ${count} notes`;
+        }
     }
 
     setScope(scope, folderPath) {
         this.scope      = scope;
         this.folderPath = folderPath;
 
-        if (!this.scopeBarEl) return;
-        const btns = this.scopeBarEl.querySelectorAll('.va-scope-btn');
-        btns.forEach(b => b.removeClass('va-scope-active'));
-        if (scope === 'note')    btns[0]?.addClass('va-scope-active');
-        if (scope === 'folder')  btns[1]?.addClass('va-scope-active');
-        if (scope === 'vault')   btns[2]?.addClass('va-scope-active');
+        // Update segment active state
+        if (this.scopeBarEl) {
+            this.scopeBarEl.querySelectorAll('.va-seg-btn').forEach(b => b.removeClass('va-seg-active'));
+            const btns = this.scopeBarEl.querySelectorAll('.va-seg-btn');
+            if (scope === 'note')   btns[0]?.addClass('va-seg-active');
+            if (scope === 'folder') btns[1]?.addClass('va-seg-active');
+            if (scope === 'vault')  btns[2]?.addClass('va-seg-active');
+        }
 
+        // Update folder button label
         if (this.folderScopeBtn) {
             this.folderScopeBtn.textContent = scope === 'folder' && folderPath !== null
                 ? this.truncateFolderLabel(folderPath)
                 : 'Folder ▾';
         }
+
+        this.updateScopeHint();
     }
 
     truncateFolderLabel(path) {
@@ -160,15 +203,16 @@ class VaultAssistantView extends ItemView {
 
     buildInputArea(parent) {
         const area = parent.createDiv('va-input-area');
+        const box  = area.createDiv('va-input-box');
 
-        this.textarea = area.createEl('textarea', {
+        this.textarea = box.createEl('textarea', {
             cls: 'va-textarea',
             attr: { placeholder: 'Ask anything about your notes…', rows: '1' },
         });
 
         this.textarea.addEventListener('input', () => {
             this.textarea.style.height = 'auto';
-            this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+            this.textarea.style.height = Math.min(this.textarea.scrollHeight, 160) + 'px';
         });
 
         this.textarea.addEventListener('keydown', (e) => {
@@ -178,7 +222,11 @@ class VaultAssistantView extends ItemView {
             }
         });
 
-        const sendBtn = area.createEl('button', { text: 'Send', cls: 'va-send-btn' });
+        const sendBtn = box.createEl('button', {
+            cls: 'va-send-btn',
+            attr: { 'aria-label': 'Send' },
+        });
+        sendBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
         sendBtn.addEventListener('click', () => this.sendMessage());
     }
 
@@ -193,16 +241,13 @@ class VaultAssistantView extends ItemView {
             return;
         }
 
-        // Reset textarea
         this.textarea.value = '';
         this.textarea.style.height = 'auto';
 
-        // User message
         const userMsg = { role: 'user', content: text };
         this.messages.push(userMsg);
         this.renderMessage(userMsg, false);
 
-        // Loading indicator
         const loadingEl = this.messagesEl.createDiv('va-loading');
         ['●', '●', '●'].forEach(dot => loadingEl.createSpan({ text: dot }));
         this.scrollToBottom();
@@ -213,7 +258,6 @@ class VaultAssistantView extends ItemView {
             const reply        = await this.callClaude(systemPrompt);
 
             loadingEl.remove();
-
             const assistantMsg = { role: 'assistant', content: reply };
             this.messages.push(assistantMsg);
             this.renderMessage(assistantMsg, true);
@@ -247,9 +291,10 @@ class VaultAssistantView extends ItemView {
 
         const CHAR_LIMIT = 50000;
         const scopeLabel = this.scope === 'folder' && this.folderPath
-            ? this.folderPath.split('/').pop() || 'root'
+            ? (this.folderPath.split('/').pop() || 'root')
             : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
-        let context = `[VAULT SCOPE - ${scopeLabel}]\n`;
+
+        let context = `[VAULT SCOPE — ${scopeLabel}]\n`;
         let total = 0;
         let truncated = false;
 
@@ -308,7 +353,6 @@ ${context}`;
     // ── API Call ──────────────────────────────────────────────────────────────
 
     async callClaude(systemPrompt) {
-        // Build messages for API (exclude system prompt from messages array)
         const apiMessages = this.messages.map(m => ({ role: m.role, content: m.content }));
 
         const res = await requestUrl({
@@ -340,8 +384,7 @@ ${context}`;
             throw new Error(errMsg);
         }
 
-        const data = res.json;
-        return data.content?.[0]?.text || '';
+        return res.json?.content?.[0]?.text || '';
     }
 
     // ── Edit Block Parsing ────────────────────────────────────────────────────
@@ -359,11 +402,10 @@ ${context}`;
     // ── Render Message ────────────────────────────────────────────────────────
 
     renderMessage(msg, withActions) {
-        const isUser = msg.role === 'user';
-        const wrapper = this.messagesEl.createDiv('va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper'));
-
-        const editBlock     = !isUser ? this.parseEditBlock(msg.content) : null;
-        const displayText   = editBlock ? this.stripEditBlock(msg.content) : msg.content;
+        const isUser      = msg.role === 'user';
+        const wrapper     = this.messagesEl.createDiv('va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper'));
+        const editBlock   = !isUser ? this.parseEditBlock(msg.content) : null;
+        const displayText = editBlock ? this.stripEditBlock(msg.content) : msg.content;
 
         const bubble = wrapper.createDiv('va-bubble ' + (isUser ? 'va-user-bubble' : 'va-assistant-bubble'));
 
@@ -377,28 +419,23 @@ ${context}`;
         if (!isUser && withActions) {
             const actionsEl = wrapper.createDiv('va-actions');
 
-            // Copy button always available on assistant messages
-            const copyBtn = actionsEl.createEl('button', { text: 'Copy', cls: 'va-btn va-btn-copy' });
+            // Copy button
+            const copyBtn = actionsEl.createEl('button', { text: 'Copy', cls: 'va-pill-btn' });
             copyBtn.addEventListener('click', () => {
-                const confirm = () => {
-                    copyBtn.textContent = 'Copied!';
+                const done = () => {
+                    copyBtn.textContent = '✓ Copied';
                     setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
                 };
                 if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(displayText).then(confirm).catch(() => {
-                        this.fallbackCopy(displayText);
-                        confirm();
-                    });
+                    navigator.clipboard.writeText(displayText).then(done).catch(() => { this.fallbackCopy(displayText); done(); });
                 } else {
-                    this.fallbackCopy(displayText);
-                    confirm();
+                    this.fallbackCopy(displayText); done();
                 }
             });
 
             if (editBlock) {
-                // Show Apply / Discard for file edits
-                const applyBtn   = actionsEl.createEl('button', { text: 'Apply',   cls: 'va-btn va-btn-primary' });
-                const discardBtn = actionsEl.createEl('button', { text: 'Discard', cls: 'va-btn' });
+                const applyBtn   = actionsEl.createEl('button', { text: 'Apply',   cls: 'va-pill-btn va-pill-primary' });
+                const discardBtn = actionsEl.createEl('button', { text: 'Discard', cls: 'va-pill-btn' });
 
                 applyBtn.addEventListener('click', async () => {
                     applyBtn.disabled = true;
@@ -410,10 +447,9 @@ ${context}`;
                     actionsEl.createEl('span', { text: 'Discarded', cls: 'va-status-label' });
                 });
             } else {
-                // Show Save / Add for plain responses
-                const saveBtn    = actionsEl.createEl('button', { text: 'Save as note',  cls: 'va-btn' });
-                const addBtn     = actionsEl.createEl('button', { text: 'Add to note',   cls: 'va-btn' });
-                const replaceBtn = actionsEl.createEl('button', { text: 'Replace note',  cls: 'va-btn va-btn-warning' });
+                const saveBtn    = actionsEl.createEl('button', { text: 'Save as note', cls: 'va-pill-btn' });
+                const addBtn     = actionsEl.createEl('button', { text: 'Add to note',  cls: 'va-pill-btn' });
+                const replaceBtn = actionsEl.createEl('button', { text: 'Replace',      cls: 'va-pill-btn va-pill-danger' });
 
                 saveBtn.addEventListener('click',    () => this.saveAsNote(displayText));
                 addBtn.addEventListener('click',     () => this.addToNote(displayText));
@@ -430,12 +466,8 @@ ${context}`;
         if (edit.action === 'delete') {
             new ConfirmModal(this.app, `Delete "${edit.path}"? This cannot be undone.`, async () => {
                 const file = vault.getAbstractFileByPath(edit.path);
-                if (file) {
-                    await vault.delete(file);
-                    new Notice('Deleted: ' + edit.path);
-                } else {
-                    new Notice('File not found: ' + edit.path);
-                }
+                if (file) { await vault.delete(file); new Notice('Deleted: ' + edit.path); }
+                else new Notice('File not found: ' + edit.path);
                 actionsEl.empty();
                 actionsEl.createEl('span', { text: '✓ Deleted', cls: 'va-status-label' });
             }).open();
@@ -450,14 +482,10 @@ ${context}`;
                 new Notice('Updated: ' + edit.path);
 
             } else if (edit.action === 'create') {
-                // Create intermediate folders if needed
-                const parts = edit.path.split('/');
-                parts.pop();
+                const parts = edit.path.split('/'); parts.pop();
                 if (parts.length > 0) {
-                    const folderPath = parts.join('/');
-                    if (!vault.getAbstractFileByPath(folderPath)) {
-                        await vault.createFolder(folderPath);
-                    }
+                    const fp = parts.join('/');
+                    if (!vault.getAbstractFileByPath(fp)) await vault.createFolder(fp);
                 }
                 await vault.create(edit.path, edit.content || '');
                 new Notice('Created: ' + edit.path);
@@ -474,19 +502,18 @@ ${context}`;
         } catch (err) {
             new Notice('Apply failed: ' + err.message);
             actionsEl.empty();
-            actionsEl.createEl('span', { text: '✗ Failed: ' + err.message, cls: 'va-status-label va-status-error' });
+            actionsEl.createEl('span', { text: '✗ ' + err.message, cls: 'va-status-label va-status-error' });
         }
     }
 
     async saveAsNote(content) {
-        const ts = new Date().toISOString().slice(0, 16).replace('T', '_').replaceAll(':', '-');
-        const folder = this.plugin.settings.savedNotesFolder;
+        const ts       = new Date().toISOString().slice(0, 16).replace('T', '_').replaceAll(':', '-');
+        const folder   = this.plugin.settings.savedNotesFolder;
         const filename = `Claude Note ${ts}.md`;
-        const path = folder ? `${folder}/${filename}` : filename;
+        const path     = folder ? `${folder}/${filename}` : filename;
         try {
-            if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
+            if (folder && !this.app.vault.getAbstractFileByPath(folder))
                 await this.app.vault.createFolder(folder);
-            }
             await this.app.vault.create(path, content);
             new Notice('Saved: ' + path);
         } catch (err) {
@@ -518,8 +545,7 @@ ${context}`;
         el.value = text;
         el.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
         document.body.appendChild(el);
-        el.focus();
-        el.select();
+        el.focus(); el.select();
         try { document.execCommand('copy'); } catch {}
         document.body.removeChild(el);
     }
@@ -546,48 +572,86 @@ class FolderScopeModal extends Modal {
     onOpen() {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('p', { text: 'Select which folder Claude can see', cls: 'va-modal-msg va-folder-modal-title' });
+        contentEl.createEl('p', { text: 'Select folder scope', cls: 'va-modal-title' });
 
-        const active = this.app.workspace.getActiveFile();
-        if (!active?.parent) {
-            contentEl.createEl('p', { text: 'Open a note first.', cls: 'va-modal-msg' });
-            return;
-        }
-
-        // Walk up the folder tree from the file's parent to root
-        const levels = [];
-        let folder = active.parent;
-        while (folder) {
-            levels.push(folder);
-            folder = folder.parent;
-        }
-
-        const allFiles = this.app.vault.getMarkdownFiles();
-        const list = contentEl.createDiv('va-folder-list');
-
-        levels.forEach((f, i) => {
-            const isRoot   = f.path === '' || f.path === '/';
-            const path     = isRoot ? '' : f.path;
-            const name     = isRoot ? 'Vault root' : f.name || f.path;
-            const depth    = levels.length - 1 - i; // 0 = deepest (file's direct parent)
-            const count    = isRoot
-                ? allFiles.length
-                : allFiles.filter(file => file.path.startsWith(path + '/')).length;
-            const isActive = this.view.folderPath === path;
-
-            const item = list.createDiv('va-folder-item' + (isActive ? ' va-folder-item-active' : ''));
-
-            // Indentation dots to show depth visually
-            if (depth > 0) item.createSpan({ text: '  '.repeat(depth) + '↳ ', cls: 'va-folder-indent' });
-
-            item.createSpan({ text: '📁 ' + name, cls: 'va-folder-name' });
-            item.createSpan({ text: ` ${count} note${count !== 1 ? 's' : ''}`, cls: 'va-folder-count' });
-
-            item.addEventListener('click', () => {
-                this.view.setScope('folder', path);
-                this.close();
-            });
+        // Search input
+        const searchInput = contentEl.createEl('input', {
+            cls: 'va-folder-search',
+            attr: { type: 'text', placeholder: 'Search folders…' },
         });
+
+        const listEl   = contentEl.createDiv('va-folder-list');
+        const allFiles = this.app.vault.getMarkdownFiles();
+
+        // Build flat sorted list of all folders in the vault
+        const folders = [];
+        const walk = (folder, depth) => {
+            folders.push({ folder, depth });
+            folder.children
+                .filter(c => c instanceof TFolder)
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .forEach(child => walk(child, depth + 1));
+        };
+
+        const root = this.app.vault.getRoot();
+        folders.push({ folder: root, depth: 0 }); // vault root entry
+        root.children
+            .filter(c => c instanceof TFolder)
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .forEach(child => walk(child, 1));
+
+        const renderList = (filter = '') => {
+            listEl.empty();
+
+            const filtered = filter
+                ? folders.filter(({ folder }) =>
+                    (folder.path || 'root').toLowerCase().includes(filter.toLowerCase()))
+                : folders;
+
+            if (filtered.length === 0) {
+                listEl.createDiv({ cls: 'va-folder-empty', text: 'No folders match.' });
+                return;
+            }
+
+            filtered.forEach(({ folder, depth }) => {
+                const isRoot   = folder.path === '' || folder.path === '/';
+                const path     = isRoot ? '' : folder.path;
+                const name     = isRoot ? 'Vault root' : folder.name;
+                const count    = isRoot
+                    ? allFiles.length
+                    : allFiles.filter(f => f.path.startsWith(path + '/')).length;
+                const isActive = this.view.folderPath === path;
+
+                const item = listEl.createDiv('va-folder-item' + (isActive ? ' va-folder-item-active' : ''));
+
+                const left = item.createDiv('va-folder-item-left');
+
+                // Indentation (only when not filtering)
+                if (!filter && depth > 0) {
+                    left.createSpan({ text: '  '.repeat(depth - 1) + '↳ ', cls: 'va-folder-indent' });
+                }
+
+                left.createSpan({ text: isRoot ? '🗄 ' : '📁 ', cls: 'va-folder-icon' });
+                left.createSpan({
+                    text: filter ? (path || 'Vault root') : name,
+                    cls: 'va-folder-name',
+                });
+
+                item.createSpan({ text: String(count), cls: 'va-folder-count' });
+
+                item.addEventListener('click', () => {
+                    this.view.setScope('folder', path);
+                    this.close();
+                });
+            });
+        };
+
+        renderList();
+
+        searchInput.addEventListener('input', () => renderList(searchInput.value.trim()));
+
+        // Auto-focus search on open
+        setTimeout(() => searchInput.focus(), 80);
     }
 
     onClose() { this.contentEl.empty(); }
@@ -598,22 +662,19 @@ class FolderScopeModal extends Modal {
 class ConfirmModal extends Modal {
     constructor(app, message, onConfirm, confirmLabel = 'Delete') {
         super(app);
-        this.message = message;
-        this.onConfirm = onConfirm;
+        this.message      = message;
+        this.onConfirm    = onConfirm;
         this.confirmLabel = confirmLabel;
     }
 
     onOpen() {
         const { contentEl } = this;
         contentEl.createEl('p', { text: this.message, cls: 'va-modal-msg' });
-
         const btns = contentEl.createDiv('va-modal-btns');
-
-        const cancelBtn  = btns.createEl('button', { text: 'Cancel',          cls: 'va-btn' });
-        const confirmBtn = btns.createEl('button', { text: this.confirmLabel, cls: 'va-btn va-btn-danger' });
-
-        cancelBtn.addEventListener('click',  () => this.close());
-        confirmBtn.addEventListener('click', () => { this.onConfirm(); this.close(); });
+        btns.createEl('button', { text: 'Cancel', cls: 'va-pill-btn' })
+            .addEventListener('click', () => this.close());
+        btns.createEl('button', { text: this.confirmLabel, cls: 'va-pill-btn va-pill-danger' })
+            .addEventListener('click', () => { this.onConfirm(); this.close(); });
     }
 
     onClose() { this.contentEl.empty(); }
@@ -632,7 +693,6 @@ class VaultAssistantSettingTab extends PluginSettingTab {
         containerEl.empty();
         containerEl.createEl('h2', { text: 'Vault Assistant' });
 
-        // API Key
         new Setting(containerEl)
             .setName('Anthropic API Key')
             .setDesc('Get yours at console.anthropic.com. Stored locally only.')
@@ -646,22 +706,20 @@ class VaultAssistantSettingTab extends PluginSettingTab {
                 text.inputEl.type = 'password';
             });
 
-        // Model
         new Setting(containerEl)
             .setName('Model')
             .addDropdown(drop => drop
-                .addOption('claude-sonnet-4-6',        'Claude Sonnet 4.6 (Recommended)')
-                .addOption('claude-haiku-4-5-20251001', 'Claude Haiku 4.5 (Faster)')
+                .addOption('claude-sonnet-4-6',         'Claude Sonnet 4.6 (Recommended)')
+                .addOption('claude-haiku-4-5-20251001',  'Claude Haiku 4.5 (Faster)')
                 .setValue(this.plugin.settings.model)
                 .onChange(async (v) => {
                     this.plugin.settings.model = v;
                     await this.plugin.saveSettings();
                 }));
 
-        // Max tokens
         new Setting(containerEl)
             .setName('Max Tokens')
-            .setDesc('Maximum length of Claude\'s response (256 – 8192).')
+            .setDesc('Maximum length of Claude\'s response (256–8192).')
             .addSlider(slider => slider
                 .setLimits(256, 8192, 256)
                 .setValue(this.plugin.settings.maxTokens)
@@ -671,7 +729,6 @@ class VaultAssistantSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Saved notes folder
         new Setting(containerEl)
             .setName('Saved Notes Folder')
             .setDesc('Folder where "Save as note" creates files. Leave empty for vault root.')
@@ -683,7 +740,6 @@ class VaultAssistantSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Clear conversation
         new Setting(containerEl)
             .setName('Clear Conversation')
             .setDesc('Wipe the current chat history.')
