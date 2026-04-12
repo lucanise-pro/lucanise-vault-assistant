@@ -157,11 +157,19 @@
     font-size: 14px;
     line-height: 1.6;
     white-space: pre-wrap;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
 }
 
 /* ─── Markdown Rendering ─────────────────────────────────────────────────── */
 
-.va-markdown { white-space: normal; }
+.va-markdown {
+    white-space: normal;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
 .va-markdown p { margin: 0 0 8px; }
 .va-markdown p:last-child { margin-bottom: 0; }
 .va-markdown ul, .va-markdown ol { margin: 4px 0 8px 20px; padding: 0; }
