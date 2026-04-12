@@ -116,6 +116,7 @@
     flex-direction: column;
     gap: 16px;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-y; /* scroll takes priority over text-select on iOS */
 }
 
 /* ─── Message Wrappers ───────────────────────────────────────────────────── */
