@@ -82,6 +82,12 @@
 
 /* ─── Clear Button ───────────────────────────────────────────────────────── */
 
+.va-clear-btn svg {
+    width: 15px;
+    height: 15px;
+    pointer-events: none;
+}
+
 .va-clear-btn {
     flex-shrink: 0;
     width: 36px;
@@ -331,6 +337,12 @@
 .va-textarea::placeholder { color: var(--text-faint); }
 
 /* Circular send button — sits inside the container */
+.va-send-btn svg {
+    width: 18px;
+    height: 18px;
+    pointer-events: none;
+}
+
 .va-send-btn {
     width: 34px;
     height: 34px;
