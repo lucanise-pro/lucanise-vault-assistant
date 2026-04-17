@@ -97,10 +97,29 @@ class VaultAssistantView extends ItemView {
 
         this.buildHeader(root);
         this.messagesEl = root.createDiv('va-messages');
+        this.buildEmptyState();
         this.buildInputArea(root);
 
         this.messages.forEach(msg => this.renderMessage(msg, false));
+        if (this.messages.length === 0) this.showEmptyState();
         this.scrollToBottom();
+    }
+
+    buildEmptyState() {
+        this.emptyStateEl = this.messagesEl.createDiv('va-empty-state');
+        const iconEl = this.emptyStateEl.createDiv('va-empty-icon');
+        setIcon(iconEl, 'message-circle');
+        this.emptyStateEl.createDiv({ cls: 'va-empty-title', text: 'Vault Assistant' });
+        this.emptyStateEl.createDiv({ cls: 'va-empty-sub', text: 'Ask anything about your notes' });
+        this.emptyStateEl.style.display = 'none';
+    }
+
+    showEmptyState() {
+        if (this.emptyStateEl) this.emptyStateEl.style.display = 'flex';
+    }
+
+    hideEmptyState() {
+        if (this.emptyStateEl) this.emptyStateEl.style.display = 'none';
     }
 
     buildHeader(parent) {
@@ -413,8 +432,16 @@ ${context}`;
     // ── Render Message ────────────────────────────────────────────────────────
 
     renderMessage(msg, withActions) {
+        this.hideEmptyState();
         const isUser      = msg.role === 'user';
-        const wrapper     = this.messagesEl.createDiv('va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper'));
+        // Group consecutive same-sender messages closer together
+        const allWrappers = this.messagesEl.querySelectorAll('.va-msg-wrapper');
+        const lastWrapper = allWrappers[allWrappers.length - 1];
+        const lastRole    = lastWrapper?.classList.contains(isUser ? 'va-user-wrapper' : 'va-assistant-wrapper');
+        const wrapper     = this.messagesEl.createDiv(
+            'va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper') +
+            (lastRole ? ' va-grouped' : '')
+        );
         const editBlock   = !isUser ? this.parseEditBlock(msg.content) : null;
         const displayText = !isUser ? this.stripEditBlock(msg.content) : msg.content;
 
@@ -569,7 +596,11 @@ ${context}`;
 
     clearMessages() {
         this.messages = [];
-        if (this.messagesEl) this.messagesEl.empty();
+        if (this.messagesEl) {
+            this.messagesEl.empty();
+            this.buildEmptyState();
+            this.showEmptyState();
+        }
         new Notice('Conversation cleared.');
     }
 }
