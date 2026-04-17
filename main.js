@@ -232,10 +232,10 @@ class VaultAssistantView extends ItemView {
 
         this.textarea.addEventListener('input', () => {
             this.textarea.style.height = 'auto';
-            const h = Math.min(this.textarea.scrollHeight, 140);
+            const MAX = 140;
+            const h = Math.min(this.textarea.scrollHeight, MAX);
             this.textarea.style.height = h + 'px';
-            // only scroll internally when truly at max height
-            this.textarea.style.overflowY = this.textarea.scrollHeight > 140 ? 'auto' : 'hidden';
+            this.textarea.style.overflowY = this.textarea.scrollHeight > MAX ? 'auto' : 'hidden';
         });
 
         this.textarea.addEventListener('keydown', (e) => {
