@@ -340,7 +340,7 @@
 /* ─── Input Area ─────────────────────────────────────────────────────────── */
 
 .va-input-area {
-    padding: 8px 10px;
+    padding: 6px 10px 8px;
     border-top: 1px solid var(--background-modifier-border);
     background: var(--background-primary);
     flex-shrink: 0;
@@ -393,11 +393,12 @@
 
 .va-textarea::placeholder { color: var(--text-faint); }
 
-/* Send button — vertically centred by parent align-items: center */
+/* Send button */
 .va-send-btn svg {
     width: 18px;
     height: 18px;
     pointer-events: none;
+    stroke-width: 2.5;             /* thicker arrow, more visible at small size */
 }
 
 .va-send-btn {
@@ -407,7 +408,7 @@
     border-radius: 50%;
     border: none;
     background: var(--interactive-accent);
-    color: var(--text-on-accent);
+    color: #ffffff;                /* always white — accent can be any dark/light colour */
     cursor: pointer;
     flex-shrink: 0;
     display: flex;
@@ -417,7 +418,7 @@
     -webkit-appearance: none;
     touch-action: manipulation;
     transition: opacity 0.15s, transform 0.1s;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35); /* stronger shadow on dark bg */
 }
 
 .va-send-btn:active {
