@@ -744,7 +744,7 @@ class VaultAssistantSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Saved Notes Folder')
-            .setDesc('Folder where "Save as note" creates files. Leave empty for vault root.')
+            .setDesc('Folder where "New note" creates files. Leave empty for vault root.')
             .addText(text => text
                 .setPlaceholder('e.g. AI Notes')
                 .setValue(this.plugin.settings.savedNotesFolder)

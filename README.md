@@ -63,8 +63,7 @@ Open the panel via the ribbon icon or Command Palette (`Open Vault Assistant`).
 
 **Scope selector** at the top controls what Claude can see:
 - **Note** — only the current note
-- **Folder** — all notes in the same folder
-- **Parent** — all notes in the parent folder
+- **Folder** — all notes in a chosen folder
 - **Vault** — your entire vault (truncated at ~50k chars)
 
 Just type naturally. Examples:
