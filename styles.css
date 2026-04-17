@@ -343,72 +343,73 @@
     padding: 10px 12px;
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--background-modifier-border);
-    background: var(--background-secondary);
+    background: var(--background-primary); /* same as input box — no floating box */
     flex-shrink: 0;
-    /* keep input anchored when iOS keyboard shrinks viewport */
     position: relative;
     z-index: 1;
 }
 
+/* Single visual container — one border, one background, nothing inside it */
 .va-input-box {
     display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    background: var(--background-primary);
+    align-items: center; /* vertically centre textarea + send btn */
+    gap: 6px;
+    background: var(--background-secondary);
     border: 1.5px solid var(--background-modifier-border);
-    border-radius: 26px;
-    padding: 10px 8px 10px 16px;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+    border-radius: 22px;
+    padding: 8px 6px 8px 14px;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .va-input-box:focus-within {
     border-color: var(--interactive-accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 15%, transparent),
-                0 1px 4px rgba(0, 0, 0, 0.07);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 12%, transparent);
 }
 
+/* Full iOS reset — kill every native textarea style */
 .va-textarea {
     flex: 1;
-    min-height: 24px;
+    min-height: 22px;
     max-height: 140px;
-    padding: 0;
+    padding: 2px 0;
     margin: 0;
-    font-size: 16px;       /* ≥16px prevents iOS auto-zoom */
+    font-size: 16px;              /* ≥16px prevents iOS auto-zoom */
     font-family: inherit;
-    line-height: 1.5;
-    border: none;
-    background: transparent;
+    line-height: 1.45;
+    border: none !important;
+    border-radius: 0;
+    background: transparent !important;
     color: var(--text-normal);
     resize: none;
-    overflow-y: hidden;    /* JS switches to auto when max-height is hit */
+    overflow-y: hidden;
     word-break: break-word;
     -webkit-overflow-scrolling: touch;
-    -webkit-appearance: none;
-    outline: none;
-    display: block;        /* prevents inline baseline clipping on iOS */
+    -webkit-appearance: none !important;
+    -webkit-box-shadow: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    display: block;
 }
 
 .va-textarea::placeholder { color: var(--text-faint); }
 
-/* Circular send button */
+/* Send button — vertically centred by parent align-items: center */
 .va-send-btn svg {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     pointer-events: none;
 }
 
 .va-send-btn {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
     border-radius: 50%;
     border: none;
     background: var(--interactive-accent);
     color: var(--text-on-accent);
     cursor: pointer;
     flex-shrink: 0;
-    align-self: flex-end;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -416,12 +417,11 @@
     -webkit-appearance: none;
     touch-action: manipulation;
     transition: opacity 0.15s, transform 0.1s;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
 }
 
 .va-send-btn:active {
-    opacity: 0.8;
-    transform: scale(0.90);
+    opacity: 0.75;
+    transform: scale(0.88);
 }
 
 /* ─── Folder Scope Modal ─────────────────────────────────────────────────── */
