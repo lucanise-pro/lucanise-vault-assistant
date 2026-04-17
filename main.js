@@ -254,8 +254,8 @@ class VaultAssistantView extends ItemView {
         this.scrollToBottom();
 
         try {
-            const context      = await this.buildContext();
-            const systemPrompt = this.buildSystemPrompt(context);
+            const { context, activePath } = await this.buildContext();
+            const systemPrompt = this.buildSystemPrompt(context, activePath);
             const reply        = await this.callClaude(systemPrompt);
 
             loadingEl.remove();
@@ -275,6 +275,7 @@ class VaultAssistantView extends ItemView {
     async buildContext() {
         const { vault, workspace } = this.app;
         const active = workspace.getActiveFile();
+        const activePath = active?.path ?? null;
         let files = [];
 
         if (this.scope === 'note') {
@@ -296,6 +297,8 @@ class VaultAssistantView extends ItemView {
             : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
 
         let context = `[VAULT SCOPE — ${scopeLabel}]\n`;
+        if (activePath) context += `[ACTIVE NOTE — ${activePath}]\n`;
+        context += '\n';
         let total = 0;
         let truncated = false;
 
@@ -310,12 +313,12 @@ class VaultAssistantView extends ItemView {
         if (truncated) context += '[Context truncated to fit token limit]\n';
         if (files.length === 0) context += '(No files in scope or no active note)\n';
 
-        return context;
+        return { context, activePath };
     }
 
     // ── System Prompt ─────────────────────────────────────────────────────────
 
-    buildSystemPrompt(context) {
+    buildSystemPrompt(context, activePath) {
         return `You are Vault Assistant, an AI built into the user's Obsidian vault. Help them read, edit, organize, and understand their notes through natural conversation.
 
 CAPABILITIES:
@@ -341,11 +344,14 @@ Supported actions:
 - move   → move note to folder (requires "path" and "newPath")
 - delete → delete note (requires "path") — user will be asked to confirm
 
-Rules:
-- Only use <claude-edit> when making a real file change.
-- For summaries, answers, or discussion: reply in plain text only.
-- One <claude-edit> block per response.
-- Always use the full vault path (e.g. "Daily/2024-01-15.md").
+CRITICAL RULES:
+- The currently active note is: ${activePath ? `"${activePath}"` : 'none'}. Always use this exact path when editing it.
+- When the user asks to rework, rewrite, update, edit, improve, continue, translate, or change a note in ANY way → you MUST use <claude-edit>. Never show the result as plain text only.
+- When the user asks to create a new note → ALWAYS use <claude-edit> with action "create".
+- Only reply in plain text (without <claude-edit>) for: answers to questions, summaries shown in chat, analysis, discussion where no file is being changed.
+- Place the <claude-edit> block at the very end of your response, after any explanation.
+- One <claude-edit> block per response maximum.
+- Always use the full vault path exactly as shown in the context below.
 
 CURRENT VAULT CONTEXT:
 ${context}`;
@@ -435,8 +441,17 @@ ${context}`;
             });
 
             if (editBlock) {
-                const applyBtn   = actionsEl.createEl('button', { text: 'Apply',   cls: 'va-pill-btn va-pill-primary' });
-                const discardBtn = actionsEl.createEl('button', { text: 'Discard', cls: 'va-pill-btn' });
+                const targetName = editBlock.path
+                    ? editBlock.path.split('/').pop()
+                    : this.app.workspace.getActiveFile()?.name ?? 'note';
+                const applyLabel = editBlock.action === 'create'
+                    ? `Create ${targetName}`
+                    : editBlock.action === 'delete'
+                    ? `Delete ${targetName}`
+                    : `Apply → ${targetName}`;
+
+                const applyBtn   = actionsEl.createEl('button', { text: applyLabel, cls: 'va-pill-btn va-pill-primary' });
+                const discardBtn = actionsEl.createEl('button', { text: 'Discard',  cls: 'va-pill-btn' });
 
                 applyBtn.addEventListener('click', async () => {
                     applyBtn.disabled = true;
@@ -448,13 +463,11 @@ ${context}`;
                     actionsEl.createEl('span', { text: 'Discarded', cls: 'va-status-label' });
                 });
             } else {
-                const saveBtn    = actionsEl.createEl('button', { text: 'Save as note', cls: 'va-pill-btn' });
-                const addBtn     = actionsEl.createEl('button', { text: 'Add to note',  cls: 'va-pill-btn' });
-                const replaceBtn = actionsEl.createEl('button', { text: 'Replace',      cls: 'va-pill-btn va-pill-danger' });
+                const saveBtn = actionsEl.createEl('button', { text: 'New note', cls: 'va-pill-btn' });
+                const addBtn  = actionsEl.createEl('button', { text: 'Append',   cls: 'va-pill-btn' });
 
-                saveBtn.addEventListener('click',    () => this.saveAsNote(displayText));
-                addBtn.addEventListener('click',     () => this.addToNote(displayText));
-                replaceBtn.addEventListener('click', () => this.replaceNote(displayText));
+                saveBtn.addEventListener('click', () => this.saveAsNote(displayText));
+                addBtn.addEventListener('click',  () => this.addToNote(displayText));
             }
         }
     }
@@ -477,10 +490,14 @@ ${context}`;
 
         try {
             if (edit.action === 'edit') {
-                const file = vault.getAbstractFileByPath(edit.path);
-                if (!file) throw new Error('File not found: ' + edit.path);
+                let file = vault.getAbstractFileByPath(edit.path);
+                if (!file) {
+                    // fallback to the active open note
+                    file = this.app.workspace.getActiveFile();
+                    if (!file) throw new Error('File not found and no active note open.');
+                }
                 await vault.modify(file, edit.content);
-                new Notice('Updated: ' + edit.path);
+                new Notice('Updated: ' + file.name);
 
             } else if (edit.action === 'create') {
                 const parts = edit.path.split('/'); parts.pop();
@@ -526,7 +543,7 @@ ${context}`;
         const active = this.app.workspace.getActiveFile();
         if (!active) { new Notice('No active note open.'); return; }
         const existing = await this.app.vault.read(active);
-        await this.app.vault.modify(active, existing + '\n\n---\n\n' + content);
+        await this.app.vault.modify(active, existing + '\n\n' + content);
         new Notice('Added to: ' + active.name);
     }
 
