@@ -292,51 +292,58 @@
 /* ─── Input Area ─────────────────────────────────────────────────────────── */
 
 .va-input-area {
-    padding: 10px;
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 10px 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--background-modifier-border);
     background: var(--background-secondary);
     flex-shrink: 0;
+    /* keep input anchored when iOS keyboard shrinks viewport */
+    position: relative;
+    z-index: 1;
 }
 
-/* Unified rounded container — like Claude/iMessage */
 .va-input-box {
     display: flex;
     align-items: flex-end;
     gap: 8px;
     background: var(--background-primary);
     border: 1.5px solid var(--background-modifier-border);
-    border-radius: 20px;
-    padding: 8px 8px 8px 14px;
-    transition: border-color 0.15s;
+    border-radius: 26px;
+    padding: 10px 8px 10px 16px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .va-input-box:focus-within {
     border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--interactive-accent) 15%, transparent),
+                0 1px 4px rgba(0, 0, 0, 0.07);
 }
 
 .va-textarea {
     flex: 1;
-    min-height: 26px;
-    max-height: 160px;
+    min-height: 24px;
+    max-height: 140px;
     padding: 0;
-    font-size: 16px; /* ≥16px prevents iOS auto-zoom */
+    margin: 0;
+    font-size: 16px;       /* ≥16px prevents iOS auto-zoom */
     font-family: inherit;
-    line-height: 1.625;
+    line-height: 1.5;
     border: none;
     background: transparent;
     color: var(--text-normal);
     resize: none;
-    overflow-y: auto;
+    overflow-y: hidden;    /* JS switches to auto when max-height is hit */
+    word-break: break-word;
     -webkit-overflow-scrolling: touch;
     -webkit-appearance: none;
     outline: none;
-    align-self: center;
+    display: block;        /* prevents inline baseline clipping on iOS */
 }
 
 .va-textarea::placeholder { color: var(--text-faint); }
 
-/* Circular send button — sits inside the container */
+/* Circular send button */
 .va-send-btn svg {
     width: 18px;
     height: 18px;
@@ -344,9 +351,9 @@
 }
 
 .va-send-btn {
-    width: 34px;
-    height: 34px;
-    min-width: 34px;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
     border-radius: 50%;
     border: none;
     background: var(--interactive-accent);
@@ -361,11 +368,12 @@
     -webkit-appearance: none;
     touch-action: manipulation;
     transition: opacity 0.15s, transform 0.1s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
 }
 
 .va-send-btn:active {
     opacity: 0.8;
-    transform: scale(0.92);
+    transform: scale(0.90);
 }
 
 /* ─── Folder Scope Modal ─────────────────────────────────────────────────── */
