@@ -406,7 +406,7 @@ ${context}`;
         const isUser      = msg.role === 'user';
         const wrapper     = this.messagesEl.createDiv('va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper'));
         const editBlock   = !isUser ? this.parseEditBlock(msg.content) : null;
-        const displayText = editBlock ? this.stripEditBlock(msg.content) : msg.content;
+        const displayText = !isUser ? this.stripEditBlock(msg.content) : msg.content;
 
         const bubble = wrapper.createDiv('va-bubble ' + (isUser ? 'va-user-bubble' : 'va-assistant-bubble'));
 
