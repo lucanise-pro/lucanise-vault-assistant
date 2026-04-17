@@ -547,15 +547,6 @@ ${context}`;
         new Notice('Added to: ' + active.name);
     }
 
-    async replaceNote(content) {
-        const active = this.app.workspace.getActiveFile();
-        if (!active) { new Notice('No active note open.'); return; }
-        new ConfirmModal(this.app, `Replace the full content of "${active.name}"?`, async () => {
-            await this.app.vault.modify(active, content);
-            new Notice('Replaced: ' + active.name);
-        }, 'Replace').open();
-    }
-
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fallbackCopy(text) {
