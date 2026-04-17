@@ -340,7 +340,7 @@
 /* ─── Input Area ─────────────────────────────────────────────────────────── */
 
 .va-input-area {
-    padding: 6px 10px 8px;
+    padding: 0;
     border-top: 1px solid var(--background-modifier-border);
     background: var(--background-primary);
     flex-shrink: 0;
@@ -348,7 +348,7 @@
     z-index: 1;
 }
 
-/* Single visual container — one border, one background, nothing inside it */
+/* Single visual container — spacing lives here, not on the outer area */
 .va-input-box {
     display: flex;
     align-items: center;
@@ -356,6 +356,7 @@
     background: var(--background-secondary);
     border: 1.5px solid var(--background-modifier-border);
     border-radius: 22px;
+    margin: 6px 10px 8px;
     padding: 9px 8px 9px 14px;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -398,7 +399,9 @@
     width: 18px;
     height: 18px;
     pointer-events: none;
-    stroke-width: 2.5;             /* thicker arrow, more visible at small size */
+    stroke: #ffffff !important;    /* directly set — iOS doesn't inherit currentColor reliably */
+    stroke-width: 2.5 !important;
+    fill: none !important;
 }
 
 .va-send-btn {
@@ -408,7 +411,7 @@
     border-radius: 50%;
     border: none;
     background: var(--interactive-accent);
-    color: #ffffff;                /* always white — accent can be any dark/light colour */
+    color: #ffffff;
     cursor: pointer;
     flex-shrink: 0;
     display: flex;
@@ -418,7 +421,7 @@
     -webkit-appearance: none;
     touch-action: manipulation;
     transition: opacity 0.15s, transform 0.1s;
-    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35); /* stronger shadow on dark bg */
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
 }
 
 .va-send-btn:active {
