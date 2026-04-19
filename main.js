@@ -422,7 +422,19 @@ ${context}`;
     parseEditBlock(content) {
         const match = content.match(/<claude-edit>([\s\S]*?)<\/claude-edit>/);
         if (!match) return null;
-        try { return JSON.parse(match[1].trim()); } catch { return null; }
+        try {
+            const edit = JSON.parse(match[1].trim());
+            // Claude sometimes double-escapes newlines (\n → literal \\n).
+            // JSON.parse then gives us a two-char sequence instead of a real newline.
+            // Normalise here so the file always gets proper line breaks.
+            if (edit.content && typeof edit.content === 'string') {
+                edit.content = edit.content
+                    .replace(/\\r\\n/g, '\n')
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\r/g, '\n');
+            }
+            return edit;
+        } catch { return null; }
     }
 
     stripEditBlock(content) {
