@@ -1,7 +1,7 @@
 {
   "id": "lucanise-vault-assistant",
   "name": "Lucanise Vault Assistant",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "0.15.0",
   "description": "Chat with Claude about your notes. Works on iOS and iPadOS.",
   "author": "Lucanise",
