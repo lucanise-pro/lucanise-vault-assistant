@@ -152,12 +152,9 @@
     border-bottom-right-radius: 4px;
 }
 
-/* White semi-transparent selection — clearly visible on any accent colour */
+/* White semi-transparent selection — clearly visible on any accent colour.
+   ::selection is supported in iOS WKWebView (Obsidian on iOS 14.1+). */
 .va-user-bubble ::selection {
-    background: rgba(255, 255, 255, 0.35);
-    color: var(--text-on-accent);
-}
-.va-user-bubble ::-webkit-selection {
     background: rgba(255, 255, 255, 0.35);
     color: var(--text-on-accent);
 }
