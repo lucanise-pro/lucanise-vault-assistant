@@ -394,12 +394,15 @@
 
 .va-textarea::placeholder { color: var(--text-faint); }
 
-/* Send button */
+/* Send button — theme-independent contrast:
+   --text-normal  = dark on light theme, light on dark theme (background)
+   --background-primary = opposite of above (icon stroke)
+   Guaranteed readable on every theme with no accent dependency. */
 .va-send-btn svg {
     width: 18px;
     height: 18px;
     pointer-events: none;
-    stroke: var(--text-on-accent) !important; /* explicit — iOS doesn't inherit currentColor reliably */
+    stroke: var(--background-primary) !important;
     stroke-width: 2.5 !important;
     fill: none !important;
 }
@@ -410,8 +413,8 @@
     min-width: 38px;
     border-radius: 50%;
     border: none;
-    background: var(--interactive-accent);
-    color: var(--text-on-accent); /* correct contrast on both light and dark themes */
+    background: var(--text-normal);
+    color: var(--background-primary);
     cursor: pointer;
     flex-shrink: 0;
     display: flex;
