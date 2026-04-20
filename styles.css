@@ -399,7 +399,7 @@
     width: 18px;
     height: 18px;
     pointer-events: none;
-    stroke: #ffffff !important;    /* directly set — iOS doesn't inherit currentColor reliably */
+    stroke: var(--text-on-accent) !important; /* explicit — iOS doesn't inherit currentColor reliably */
     stroke-width: 2.5 !important;
     fill: none !important;
 }
@@ -411,7 +411,7 @@
     border-radius: 50%;
     border: none;
     background: var(--interactive-accent);
-    color: #ffffff;
+    color: var(--text-on-accent); /* correct contrast on both light and dark themes */
     cursor: pointer;
     flex-shrink: 0;
     display: flex;
