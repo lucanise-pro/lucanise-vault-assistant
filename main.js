@@ -762,17 +762,96 @@ class VaultAssistantSettingTab extends PluginSettingTab {
                 text.inputEl.type = 'password';
             });
 
-        new Setting(containerEl)
+        const FALLBACK_MODELS = [
+            { id: 'claude-opus-4-5',           label: 'Claude Opus 4.5 (Most powerful)' },
+            { id: 'claude-sonnet-4-6',          label: 'Claude Sonnet 4.6 (Recommended)' },
+            { id: 'claude-haiku-4-5-20251001',  label: 'Claude Haiku 4.5 (Faster)' },
+        ];
+
+        const modelSetting = new Setting(containerEl)
             .setName('Model')
-            .addDropdown(drop => drop
-                .addOption('claude-opus-4-5',            'Claude Opus 4.5 (Most powerful)')
-                .addOption('claude-sonnet-4-6',         'Claude Sonnet 4.6 (Recommended)')
-                .addOption('claude-haiku-4-5-20251001',  'Claude Haiku 4.5 (Faster)')
-                .setValue(this.plugin.settings.model)
+            .setDesc('Loading models…');
+
+        let dropdownComponent = null;
+        modelSetting.addDropdown(drop => {
+            dropdownComponent = drop;
+            // Seed with fallback list immediately so UI isn't empty
+            FALLBACK_MODELS.forEach(m => drop.addOption(m.id, m.label));
+            // Ensure the saved model is selectable even if not in fallback list
+            if (!FALLBACK_MODELS.find(m => m.id === this.plugin.settings.model)) {
+                drop.addOption(this.plugin.settings.model, this.plugin.settings.model);
+            }
+            drop.setValue(this.plugin.settings.model)
                 .onChange(async (v) => {
                     this.plugin.settings.model = v;
                     await this.plugin.saveSettings();
-                }));
+                });
+        });
+
+        // Async fetch — runs after the UI is rendered
+        (async () => {
+            const apiKey = this.plugin.settings.apiKey;
+            if (!apiKey) {
+                modelSetting.setDesc('Enter your API key above to load available models.');
+                return;
+            }
+            try {
+                const res = await requestUrl({
+                    url: 'https://api.anthropic.com/v1/models?limit=100',
+                    method: 'GET',
+                    headers: {
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01',
+                    },
+                });
+                const data = res.json;
+                if (!data || !Array.isArray(data.data)) throw new Error('Unexpected response');
+
+                // Filter to Claude models only
+                const claudeModels = data.data.filter(m => m.id && m.id.startsWith('claude-'));
+
+                if (claudeModels.length === 0) throw new Error('No Claude models returned');
+
+                // Sort: opus first, sonnet second, haiku third, others last; within tier sort by name desc (newest first)
+                const tierOf = id => {
+                    const l = id.toLowerCase();
+                    if (l.includes('opus'))   return 0;
+                    if (l.includes('sonnet')) return 1;
+                    if (l.includes('haiku'))  return 2;
+                    return 3;
+                };
+                claudeModels.sort((a, b) => {
+                    const td = tierOf(a.id) - tierOf(b.id);
+                    if (td !== 0) return td;
+                    return b.id.localeCompare(a.id); // newest ID first within tier
+                });
+
+                // Rebuild dropdown
+                const selectEl = dropdownComponent.selectEl;
+                // Clear existing options
+                while (selectEl.firstChild) selectEl.removeChild(selectEl.firstChild);
+
+                claudeModels.forEach(m => {
+                    const displayName = m.display_name || m.id;
+                    dropdownComponent.addOption(m.id, displayName);
+                });
+
+                // Restore saved selection; fall back to first option
+                const savedModel = this.plugin.settings.model;
+                if (claudeModels.find(m => m.id === savedModel)) {
+                    dropdownComponent.setValue(savedModel);
+                } else {
+                    dropdownComponent.setValue(claudeModels[0].id);
+                    this.plugin.settings.model = claudeModels[0].id;
+                    await this.plugin.saveSettings();
+                }
+
+                modelSetting.setDesc(`${claudeModels.length} models loaded from Anthropic — refreshes each time you open settings.`);
+            } catch (e) {
+                // Fallback already in place — just update description
+                modelSetting.setDesc('Could not fetch live models — showing defaults. Check your API key.');
+            }
+        })();
 
         new Setting(containerEl)
             .setName('Max Tokens')
