@@ -765,6 +765,7 @@ class VaultAssistantSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName('Model')
             .addDropdown(drop => drop
+                .addOption('claude-opus-4-5',            'Claude Opus 4.5 (Most powerful)')
                 .addOption('claude-sonnet-4-6',         'Claude Sonnet 4.6 (Recommended)')
                 .addOption('claude-haiku-4-5-20251001',  'Claude Haiku 4.5 (Faster)')
                 .setValue(this.plugin.settings.model)
