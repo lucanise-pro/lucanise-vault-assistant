@@ -401,15 +401,12 @@
 
 .va-textarea::placeholder { color: var(--text-faint); }
 
-/* Send button — theme-independent contrast:
-   --text-normal  = dark on light theme, light on dark theme (background)
-   --background-primary = opposite of above (icon stroke)
-   Guaranteed readable on every theme with no accent dependency. */
+/* Send button — fixed Obsidian purple, always visible on light and dark */
 .va-send-btn svg {
     width: 18px;
     height: 18px;
     pointer-events: none;
-    stroke: var(--background-primary) !important;
+    stroke: #ffffff !important;
     stroke-width: 2.5 !important;
     fill: none !important;
 }
@@ -420,8 +417,8 @@
     min-width: 38px;
     border-radius: 50%;
     border: none;
-    background: var(--text-normal);
-    color: var(--background-primary);
+    background: var(--color-purple, #7c3aed);
+    color: #ffffff;
     cursor: pointer;
     flex-shrink: 0;
     display: flex;
