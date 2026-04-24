@@ -10,15 +10,15 @@ Chat with Claude AI about your Obsidian notes. Works on Mac, iPhone, and iPad.
 
 When you send a message, the plugin:
 
-1. **Reads your note(s)** from your local vault — depending on the scope you select (single note, folder, or entire vault)
-2. **Sends that content to Anthropic's API** (`api.anthropic.com`) over HTTPS, along with your message
+1. **Sends your message to Anthropic's API** (`api.anthropic.com`) over HTTPS, along with a file index of the notes in scope
+2. **Claude reads files on demand** — using built-in vault tools, Claude fetches only the notes it actually needs to answer your question, rather than sending everything at once
 3. **Receives Claude's response** and displays it in the chat panel
 4. Optionally **writes back to your vault** if you ask Claude to create or edit a note and you confirm by tapping **Apply**
 
 No data is stored remotely. No server is involved other than Anthropic's own API. The plugin does not phone home, track usage, or send any telemetry.
 
 Your **Anthropic API key** is stored locally in your vault at:
-`.obsidian/plugins/vault-assistant/data.json`
+`.obsidian/plugins/lucanise-vault-assistant/data.json`
 
 This file stays on your device (and in your iCloud if your vault is iCloud-synced). It is **never committed to this repository** — `data.json` is in `.gitignore`.
 
@@ -26,34 +26,38 @@ This file stays on your device (and in your iCloud if your vault is iCloud-synce
 
 ## Installation
 
-### Mac (direct) - Assuming you have the vault in iCloud
+### Mac (direct) — assuming your vault is in iCloud
 
 1. In Finder, go to your vault folder → `.obsidian/plugins/`
-2. Create a folder named `vault-assistant`
+2. Create a folder named `lucanise-vault-assistant`
 3. Copy `main.js`, `manifest.json`, and `styles.css` into it
-4. Open Obsidian → Settings → Community Plugins → enable **Vault Assistant**
+4. Open Obsidian → Settings → Community Plugins → enable **Lucanise Vault Assistant**
 
 ### iPhone / iPad (via iCloud)
 
 1. On your Mac, open **Files** or **Finder** and navigate to:
    `iCloud Drive / Obsidian / YourVaultName / .obsidian / plugins /`
    > The `.obsidian` folder is hidden — in Finder press `Cmd+Shift+.` to show hidden files
-2. Create a folder named `vault-assistant` inside `plugins/`
+2. Create a folder named `lucanise-vault-assistant` inside `plugins/`
 3. Copy `main.js`, `manifest.json`, and `styles.css` into it
 4. Wait for iCloud to sync (a few seconds)
 5. On your iPhone/iPad: open Obsidian → Settings → Community Plugins
-6. Toggle **Safe Mode** off if prompted, then enable **Vault Assistant**
+6. Toggle **Safe Mode** off if prompted, then enable **Lucanise Vault Assistant**
 7. Tap the chat bubble icon in the toolbar to open the panel
 
 ---
 
 ## Setup
 
-1. Go to **Settings → Vault Assistant**
+1. Go to **Settings → Lucanise Vault Assistant**
 2. Paste your Anthropic API key (`sk-ant-...`)
    Get one at: https://console.anthropic.com
-3. Choose a model (Sonnet = smarter, Haiku = faster/cheaper)
-4. Adjust max tokens if needed (default 2048 is fine)
+3. Choose a model — the list is fetched live from Anthropic each time you open settings
+   - **Opus** — most powerful, best for complex writing and cross-note analysis
+   - **Sonnet** — recommended balance of quality and speed
+   - **Haiku** — fastest and cheapest, good for quick questions
+4. Adjust max tokens if needed (default 2048 is fine for most tasks)
+5. Optionally set a **Saved Notes Folder** where new notes created by Claude will be placed
 
 ---
 
@@ -61,34 +65,57 @@ This file stays on your device (and in your iCloud if your vault is iCloud-synce
 
 Open the panel via the ribbon icon or Command Palette (`Open Vault Assistant`).
 
-**Scope selector** at the top controls what Claude can see:
-- **Note** — only the current note
-- **Folder** — all notes in a chosen folder
-- **Vault** — your entire vault (truncated at ~50k chars)
+### Scope selector
 
-Just type naturally. Examples:
-- "Summarize this note in 3 bullet points"
+The **scope** at the top works like a working directory — it tells Claude which part of your vault to operate in:
+
+| Scope | What Claude can access |
+|---|---|
+| **Note** | The currently open note (content pre-loaded) |
+| **Folder** | All notes inside the selected folder and its subfolders |
+| **Vault** | Your entire vault |
+
+For Folder and Vault scope, Claude receives a file index and then **reads specific notes on demand** using built-in tools. You will see a live status like *"Reading filename.md…"* or *"Searching notes…"* while Claude is working.
+
+### What Claude can do
+
+- Summarise, analyse, rewrite, translate, or extend any note
+- Search across notes for a topic, then synthesise an answer
+- Compare multiple notes and spot connections
+- Extract action items, decisions, or themes
+- Create new notes or reorganise existing ones
+- Answer questions grounded in your actual vault content
+
+### Example prompts
+
+- "Summarise this note in 3 bullet points"
 - "Rewrite the intro more casually"
-- "What action items are in this note?"
+- "What are all my action items across the Projects folder?"
+- "Find every note that mentions the word budget"
 - "Create a new note called Weekly Review with a template"
 - "Translate this note to Italian"
+- "What decisions did I make last month?" *(with Vault scope)*
 
-**After every response:**
-- **Save as note** → saves Claude's reply as a new `.md` file
-- **Add to note** → appends it to the bottom of your current note
+### After a response
 
-**If Claude suggests an edit:**
-- **Apply** → writes the change to your vault immediately
+- **New note** → saves Claude's reply as a new `.md` file
+- **Append** → appends it to the bottom of the currently open note
+- **Copy** → copies the reply text to the clipboard
+
+### If Claude proposes an edit
+
+- **Apply → filename.md** → writes the change to your vault immediately
 - **Discard** → ignores it
 
 ---
 
 ## Privacy & Security
 
-- Your API key is stored locally in `.obsidian/plugins/vault-assistant/data.json` — on your device only
+- Your API key is stored locally in `.obsidian/plugins/lucanise-vault-assistant/data.json` — on your device only
 - `data.json` is excluded from this repository via `.gitignore` — it will never be committed or published
 - No analytics, no telemetry, no third-party services beyond Anthropic's API
 - The only network call is directly to `api.anthropic.com`
+- Note content is sent to Anthropic only when Claude actually needs to read it (on-demand, not all at once)
 - Delete operations always require explicit confirmation
 - You can revoke your API key at any time at https://console.anthropic.com
 
@@ -98,6 +125,7 @@ Just type naturally. Examples:
 
 - On iOS, after installing or updating the plugin, close and reopen Obsidian to activate it
 - The plugin uses the Obsidian mobile API — no Node.js or Electron dependencies
+- Each tool call (read, list, search) counts toward your Anthropic API usage
 
 ---
 
