@@ -13,6 +13,7 @@ const {
     requestUrl,
     MarkdownRenderer,
     TFolder,
+    TFile,
     setIcon,
 } = require('obsidian');
 
@@ -24,6 +25,45 @@ const DEFAULT_SETTINGS = {
     maxTokens: 2048,
     savedNotesFolder: '',
 };
+
+// ─── Vault Tools (used with the Anthropic tool_use API) ──────────────────────
+
+const VAULT_TOOLS = [
+    {
+        name: 'read_note',
+        description: 'Read the full content of a specific note in the vault. Call this whenever you need to see what a note contains before summarising, editing, translating, or answering questions about it.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'Full vault path, e.g. "Projects/Meeting Notes.md"' },
+            },
+            required: ['path'],
+        },
+    },
+    {
+        name: 'list_folder',
+        description: 'List the notes and subfolders directly inside a folder. Use this to explore the vault structure before deciding which files to read.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                folder_path: { type: 'string', description: 'Folder path to list, e.g. "Projects" or "" for vault root' },
+            },
+            required: ['folder_path'],
+        },
+    },
+    {
+        name: 'search_notes',
+        description: 'Search for notes whose title or content matches a keyword or phrase. Returns up to 20 matching paths with short excerpts. Use before read_note when you are not sure which file contains the relevant information.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                query:       { type: 'string', description: 'Text to search for' },
+                folder_path: { type: 'string', description: 'Optional — restrict search to this folder and its subfolders' },
+            },
+            required: ['query'],
+        },
+    },
+];
 
 // ─── Main Plugin ─────────────────────────────────────────────────────────────
 
@@ -68,9 +108,10 @@ class VaultAssistantPlugin extends Plugin {
 class VaultAssistantView extends ItemView {
     constructor(leaf, plugin) {
         super(leaf);
-        this.plugin    = plugin;
-        this.messages  = [];
-        this.scope     = 'note';
+        this.plugin     = plugin;
+        this.messages   = [];   // display-only: [{role, content: string}]
+        this.apiHistory = [];   // full API history including tool_use blocks
+        this.scope      = 'note';
         this.folderPath = null;
     }
 
@@ -269,22 +310,26 @@ class VaultAssistantView extends ItemView {
         this.textarea.style.height = 'auto';
         this.textarea.style.overflowY = 'hidden';
 
+        // Add to both display history and full API history
         const userMsg = { role: 'user', content: text };
         this.messages.push(userMsg);
+        this.apiHistory.push({ role: 'user', content: text });
         this.renderMessage(userMsg, false);
 
         const loadingEl = this.messagesEl.createDiv('va-loading');
         ['●', '●', '●'].forEach(dot => loadingEl.createSpan({ text: dot }));
+        loadingEl.createSpan({ cls: 'va-loading-label' }); // updated during tool calls
         this.scrollToBottom();
 
         try {
             const { context, activePath } = await this.buildContext();
             const systemPrompt = this.buildSystemPrompt(context, activePath);
-            const reply        = await this.callClaude(systemPrompt);
+            const reply        = await this.callClaude(systemPrompt, loadingEl);
 
             loadingEl.remove();
             const assistantMsg = { role: 'assistant', content: reply };
             this.messages.push(assistantMsg);
+            // apiHistory already updated inside callClaude
             this.renderMessage(assistantMsg, true);
         } catch (err) {
             loadingEl.remove();
@@ -298,41 +343,9 @@ class VaultAssistantView extends ItemView {
 
     async buildContext() {
         const { vault, workspace } = this.app;
-        const active = workspace.getActiveFile();
+        const active    = workspace.getActiveFile();
         const activePath = active?.path ?? null;
-        let files = [];
 
-        if (this.scope === 'note') {
-            if (active) files = [active];
-        } else if (this.scope === 'folder') {
-            // Trim any accidental trailing slash so startsWith never uses double-slash
-            const rawFp = this.folderPath ?? active?.parent?.path ?? null;
-            const fp = rawFp !== null ? rawFp.replace(/\/+$/, '') : null;
-            if (fp === '' || fp === null) {
-                // Vault root selected or no folder resolved — include everything
-                files = vault.getMarkdownFiles();
-            } else {
-                // Include files directly in this folder (fp/file.md) AND all subfolders (fp/sub/file.md)
-                files = vault.getMarkdownFiles().filter(f =>
-                    f.path === fp + '/' ||          // shouldn't happen but guard
-                    f.path.startsWith(fp + '/')
-                );
-            }
-        } else if (this.scope === 'vault') {
-            files = vault.getMarkdownFiles();
-        }
-
-        // Sort: files directly inside the chosen folder first, deeper nesting after, then alpha
-        if (this.scope === 'folder' && files.length > 1) {
-            files = [...files].sort((a, b) => {
-                const da = a.path.split('/').length;
-                const db = b.path.split('/').length;
-                if (da !== db) return da - db;       // shallower first
-                return a.path.localeCompare(b.path); // alpha within same depth
-            });
-        }
-
-        const CHAR_LIMIT = 100000;
         const scopeLabel = this.scope === 'folder' && this.folderPath
             ? (this.folderPath.split('/').pop() || 'root')
             : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
@@ -340,108 +353,312 @@ class VaultAssistantView extends ItemView {
         let context = `[VAULT SCOPE — ${scopeLabel}]\n`;
         if (activePath) context += `[ACTIVE NOTE — ${activePath}]\n`;
 
-        // Always list every file path so Claude knows what exists, even if content is truncated
-        if (files.length > 0) {
-            context += `[FILES IN SCOPE — ${files.length} note${files.length === 1 ? '' : 's'}]\n`;
-            files.forEach(f => { context += `  • ${f.path}\n`; });
+        if (this.scope === 'note') {
+            // Pre-load the active note directly — no tools needed for single-note work
+            context += '\n';
+            if (active) {
+                const content = await vault.read(active);
+                context += `File: ${active.path}\n---\n${content}\n---\n`;
+            } else {
+                context += '(No active note open)\n';
+            }
+        } else {
+            // Folder / Vault — send the file index only.
+            // Claude uses read_note / list_folder / search_notes tools to fetch content on demand.
+            const files = this.getScopedFiles(vault.getMarkdownFiles());
+            const sorted = [...files].sort((a, b) => {
+                const da = a.path.split('/').length, db = b.path.split('/').length;
+                if (da !== db) return da - db;
+                return a.path.localeCompare(b.path);
+            });
+            context += `[FILES IN SCOPE — ${sorted.length} note${sorted.length === 1 ? '' : 's'}]\n`;
+            sorted.forEach(f => { context += `  • ${f.path}\n`; });
+            context += '\nUse the read_note tool to fetch a file\'s content, list_folder to explore subfolders, and search_notes to find relevant files by keyword.\n';
         }
-        context += '\n';
-
-        let total = context.length;
-        let loaded = 0;
-        let truncated = false;
-
-        for (const file of files) {
-            const content = await vault.read(file);
-            const entry = `File: ${file.path}\n---\n${content}\n---\n\n`;
-            if (total + entry.length > CHAR_LIMIT) { truncated = true; break; }
-            context += entry;
-            total += entry.length;
-            loaded++;
-        }
-
-        if (truncated) context += `[Content truncated — ${loaded} of ${files.length} files fully loaded. Use Note scope for large files.]\n`;
-        if (files.length === 0) context += '(No files in scope or no active note)\n';
 
         return { context, activePath };
+    }
+
+    // ── Scope Helpers ─────────────────────────────────────────────────────────
+
+    getScopedFiles(allFiles) {
+        if (this.scope === 'vault') return allFiles;
+        if (this.scope === 'folder') {
+            const rawFp = this.folderPath ?? this.app.workspace.getActiveFile()?.parent?.path ?? '';
+            const fp = rawFp.replace(/\/+$/, '');
+            if (!fp) return allFiles;
+            return allFiles.filter(f => f.path.startsWith(fp + '/'));
+        }
+        if (this.scope === 'note') {
+            const active = this.app.workspace.getActiveFile();
+            return active ? [active] : [];
+        }
+        return [];
+    }
+
+    isInScope(filePath) {
+        if (this.scope === 'vault') return true;
+        if (this.scope === 'folder') {
+            const rawFp = this.folderPath ?? this.app.workspace.getActiveFile()?.parent?.path ?? '';
+            const fp = rawFp.replace(/\/+$/, '');
+            if (!fp) return true;
+            return filePath.startsWith(fp + '/');
+        }
+        if (this.scope === 'note') {
+            return filePath === (this.app.workspace.getActiveFile()?.path ?? '');
+        }
+        return false;
     }
 
     // ── System Prompt ─────────────────────────────────────────────────────────
 
     buildSystemPrompt(context, activePath) {
-        return `You are Vault Assistant, an AI built into the user's Obsidian vault. Help them read, edit, organize, and understand their notes through natural conversation.
+        return `You are Vault Assistant, an AI embedded in the user's Obsidian vault. Help them read, edit, organise, and understand their notes through natural conversation — like a pair programmer but for notes.
+
+TOOLS AVAILABLE:
+You have three vault tools: read_note, list_folder, search_notes.
+- Before answering any question about a note's content, call read_note to fetch it.
+- Before editing a note, call read_note first so you have the current content.
+- Use search_notes when the user asks about a topic and you need to find the right file.
+- Use list_folder to explore an unfamiliar folder structure.
+- You may call tools multiple times and chain them freely within a single response.
 
 CAPABILITIES:
-- Read, edit, summarize, rewrite, translate any note in scope
-- Continue writing from where the user left off
+- Summarise, analyse, rewrite, translate, extend, or restructure any note
 - Adjust tone: shorter, longer, more formal, more casual
-- Extract action items as a checklist
-- Generate new notes on any topic
-- Suggest tags and frontmatter improvements
-- Answer questions without necessarily editing files
-- Perform file operations using the structured format below
+- Extract action items, key decisions, or themes across multiple notes
+- Compare notes, spot patterns, suggest connections
+- Create new notes or organise existing ones
+- Answer questions grounded in the actual vault content
 
-FILE OPERATIONS — use this exact format when you want to modify the vault:
+WRITING CHANGES TO THE VAULT — use this exact format:
 
 <claude-edit>
 {"action":"edit","path":"folder/note.md","content":"full new content"}
 </claude-edit>
 
 Supported actions:
-- edit   → modify existing note (requires "path" and "content")
-- create → create new note (requires "path" and "content")
-- rename → rename/move note (requires "path" and "newPath")
-- move   → move note to folder (requires "path" and "newPath")
-- delete → delete note (requires "path") — user will be asked to confirm
+- edit   → overwrite an existing note (requires "path" and "content")
+- create → create a new note        (requires "path" and "content")
+- rename → rename / move a note     (requires "path" and "newPath")
+- delete → delete a note            (requires "path") — user must confirm
 
 CRITICAL RULES:
-- The currently active note is: ${activePath ? `"${activePath}"` : 'none'}. Always use this exact path when editing it.
-- When the user asks to rework, rewrite, update, edit, improve, continue, translate, or change a note in ANY way → you MUST use <claude-edit>. Never show the result as plain text only.
-- When the user asks to create a new note → ALWAYS use <claude-edit> with action "create".
-- Only reply in plain text (without <claude-edit>) for: answers to questions, summaries shown in chat, analysis, discussion where no file is being changed.
-- Place the <claude-edit> block at the very end of your response, after any explanation.
-- One <claude-edit> block per response maximum.
-- Always use the full vault path exactly as shown in the context below.
+- Active note: ${activePath ? `"${activePath}"` : 'none'}. Use this exact path when the user refers to "this note" or "the current note".
+- Always read a note before editing it so your rewrite is based on the real content.
+- When the user asks to edit, rewrite, improve, translate, or restructure a note → MUST use <claude-edit>. Do not show the result as chat text only.
+- When creating a new note → MUST use <claude-edit> with action "create".
+- For answers, summaries, analysis shown in chat only → plain text, no <claude-edit>.
+- One <claude-edit> block per response, placed at the very end.
+- Use the full vault path exactly as listed in the index below.
 
-CURRENT VAULT CONTEXT:
+VAULT CONTEXT:
 ${context}`;
     }
 
-    // ── API Call ──────────────────────────────────────────────────────────────
+    // ── API Call — tool loop ──────────────────────────────────────────────────
 
-    async callClaude(systemPrompt) {
-        const apiMessages = this.messages.map(m => ({ role: m.role, content: m.content }));
+    async callClaude(systemPrompt, loadingEl) {
+        const MAX_ROUNDS = 12; // safety cap on tool iterations
+        let rounds = 0;
 
-        const res = await requestUrl({
-            url: 'https://api.anthropic.com/v1/messages',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': this.plugin.settings.apiKey,
-                'anthropic-version': '2023-06-01',
-            },
-            body: JSON.stringify({
-                model: this.plugin.settings.model,
-                max_tokens: this.plugin.settings.maxTokens,
-                system: systemPrompt,
-                messages: apiMessages,
-            }),
-            throw: false,
-        });
+        while (rounds < MAX_ROUNDS) {
+            const res = await requestUrl({
+                url: 'https://api.anthropic.com/v1/messages',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': this.plugin.settings.apiKey,
+                    'anthropic-version': '2023-06-01',
+                },
+                body: JSON.stringify({
+                    model:      this.plugin.settings.model,
+                    max_tokens: this.plugin.settings.maxTokens,
+                    system:     systemPrompt,
+                    messages:   this.apiHistory,
+                    tools:      VAULT_TOOLS,
+                }),
+                throw: false,
+            });
 
-        if (res.status < 200 || res.status >= 300) {
-            let errMsg;
-            try { errMsg = res.json?.error?.message; } catch {}
-            if (!errMsg) {
-                if (res.status === 401) errMsg = 'Invalid API key. Check your key in plugin settings.';
-                else if (res.status === 429) errMsg = 'Rate limit reached. Wait a moment and try again.';
-                else if (res.status === 529) errMsg = 'Anthropic is overloaded. Try again in a few seconds.';
-                else errMsg = `HTTP ${res.status}`;
+            if (res.status < 200 || res.status >= 300) {
+                let errMsg;
+                try { errMsg = res.json?.error?.message; } catch {}
+                if (!errMsg) {
+                    if (res.status === 401) errMsg = 'Invalid API key. Check settings.';
+                    else if (res.status === 429) errMsg = 'Rate limit — wait a moment and retry.';
+                    else if (res.status === 529) errMsg = 'Anthropic is overloaded. Try again shortly.';
+                    else errMsg = `HTTP ${res.status}`;
+                }
+                throw new Error(errMsg);
             }
-            throw new Error(errMsg);
+
+            const data       = res.json;
+            const stopReason = data.stop_reason;
+            const content    = data.content || [];
+
+            if (stopReason === 'end_turn' || stopReason === 'stop_sequence') {
+                // Final text response — store in apiHistory and return text to caller
+                this.apiHistory.push({ role: 'assistant', content });
+                const textBlock = content.find(b => b.type === 'text');
+                return textBlock?.text ?? '';
+            }
+
+            if (stopReason === 'tool_use') {
+                // Claude wants to call one or more tools
+                this.apiHistory.push({ role: 'assistant', content });
+
+                const toolResults = [];
+                const toolUseBlocks = content.filter(b => b.type === 'tool_use');
+
+                for (const tu of toolUseBlocks) {
+                    this.updateLoadingLabel(loadingEl, tu.name, tu.input);
+                    const result = await this.executeTool(tu.name, tu.input);
+                    toolResults.push({
+                        type:        'tool_result',
+                        tool_use_id: tu.id,
+                        content:     result,
+                    });
+                }
+
+                this.apiHistory.push({ role: 'user', content: toolResults });
+                // Reset label to dots for the next API round
+                this.updateLoadingLabel(loadingEl, null, null);
+                rounds++;
+                continue;
+            }
+
+            // Unexpected stop_reason — return whatever text we got
+            const textBlock = content.find(b => b.type === 'text');
+            return textBlock?.text ?? '';
         }
 
-        return res.json?.content?.[0]?.text || '';
+        throw new Error('Too many tool rounds — something may have gone wrong.');
+    }
+
+    // ── Tool Execution ────────────────────────────────────────────────────────
+
+    async executeTool(toolName, toolInput) {
+        const { vault } = this.app;
+
+        // ── read_note ──────────────────────────────────────────────────────────
+        if (toolName === 'read_note') {
+            const { path } = toolInput;
+
+            if (!this.isInScope(path)) {
+                return `Error: "${path}" is outside the current scope. Ask the user to change scope or provide a path within scope.`;
+            }
+
+            let file = vault.getAbstractFileByPath(path);
+            if (!file || !(file instanceof TFile)) {
+                // Case-insensitive fallback
+                const match = vault.getMarkdownFiles().find(
+                    f => f.path.toLowerCase() === path.toLowerCase()
+                );
+                if (match) file = match;
+                else return `Error: Note not found: "${path}". Check the file list in the context.`;
+            }
+
+            const content = await vault.read(file);
+            return `File: ${file.path}\n---\n${content}`;
+        }
+
+        // ── list_folder ────────────────────────────────────────────────────────
+        if (toolName === 'list_folder') {
+            const fp = (toolInput.folder_path || '').replace(/\/+$/, '');
+            const scopedFiles = this.getScopedFiles(vault.getMarkdownFiles());
+            const folderFiles = fp === ''
+                ? scopedFiles
+                : scopedFiles.filter(f => f.path.startsWith(fp + '/'));
+
+            if (folderFiles.length === 0) {
+                return `"${fp || 'vault root'}" is empty or outside the current scope.`;
+            }
+
+            const subfolders  = new Set();
+            const directNotes = [];
+
+            folderFiles.forEach(f => {
+                const rel   = fp === '' ? f.path : f.path.slice(fp.length + 1);
+                const parts = rel.split('/');
+                if (parts.length === 1) directNotes.push(f);
+                else subfolders.add(parts[0]);
+            });
+
+            const lines = [];
+            if (subfolders.size > 0) {
+                lines.push('Subfolders:');
+                [...subfolders].sort().forEach(sub => {
+                    const subPath = fp ? `${fp}/${sub}` : sub;
+                    const cnt = folderFiles.filter(f => f.path.startsWith(subPath + '/')).length;
+                    lines.push(`  📁 ${subPath}/  (${cnt} notes)`);
+                });
+            }
+            if (directNotes.length > 0) {
+                lines.push('Notes:');
+                directNotes.sort((a, b) => a.name.localeCompare(b.name))
+                    .forEach(f => lines.push(`  📄 ${f.path}`));
+            }
+            return lines.join('\n');
+        }
+
+        // ── search_notes ───────────────────────────────────────────────────────
+        if (toolName === 'search_notes') {
+            const { query, folder_path } = toolInput;
+            const fp = folder_path ? folder_path.replace(/\/+$/, '') : null;
+
+            let files = this.getScopedFiles(vault.getMarkdownFiles());
+            if (fp) files = files.filter(f => f.path.startsWith(fp + '/'));
+
+            const qLow    = query.toLowerCase();
+            const results = [];
+
+            for (const file of files) {
+                const titleHit = file.path.toLowerCase().includes(qLow);
+                let excerpt    = null;
+                try {
+                    const body = await vault.read(file);
+                    const idx  = body.toLowerCase().indexOf(qLow);
+                    if (idx !== -1) {
+                        const s = Math.max(0, idx - 60);
+                        const e = Math.min(body.length, idx + query.length + 60);
+                        excerpt = body.slice(s, e).replace(/\n+/g, ' ').trim();
+                    }
+                } catch {}
+
+                if (titleHit || excerpt) results.push({ path: file.path, titleHit, excerpt });
+            }
+
+            if (results.length === 0) return `No notes found matching "${query}".`;
+
+            return results.slice(0, 20).map(r => {
+                const lines = [`📄 ${r.path}`];
+                if (r.titleHit) lines.push('   (title match)');
+                if (r.excerpt)  lines.push(`   "…${r.excerpt}…"`);
+                return lines.join('\n');
+            }).join('\n\n') + (results.length > 20 ? `\n\n…and ${results.length - 20} more.` : '');
+        }
+
+        return `Error: Unknown tool "${toolName}".`;
+    }
+
+    // ── Loading Label ─────────────────────────────────────────────────────────
+
+    updateLoadingLabel(loadingEl, toolName, toolInput) {
+        if (!loadingEl) return;
+        const labelEl = loadingEl.querySelector('.va-loading-label');
+        if (!labelEl) return;
+
+        if (!toolName) { labelEl.textContent = ''; return; }
+
+        if (toolName === 'read_note') {
+            const name = (toolInput?.path || '').split('/').pop();
+            labelEl.textContent = ` Reading ${name}…`;
+        } else if (toolName === 'list_folder') {
+            labelEl.textContent = ` Listing ${toolInput?.folder_path || 'vault'}…`;
+        } else if (toolName === 'search_notes') {
+            labelEl.textContent = ` Searching "${toolInput?.query}"…`;
+        }
     }
 
     // ── Edit Block Parsing ────────────────────────────────────────────────────
@@ -634,7 +851,8 @@ ${context}`;
     }
 
     clearMessages() {
-        this.messages = [];
+        this.messages   = [];
+        this.apiHistory = [];
         if (this.messagesEl) {
             this.messagesEl.empty();
             this.buildEmptyState();
