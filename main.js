@@ -249,7 +249,8 @@ class VaultAssistantView extends ItemView {
             cls: 'va-send-btn',
             attr: { 'aria-label': 'Send' },
         });
-        setIcon(sendBtn, 'arrow-up');
+        // Inline SVG — avoids Obsidian icon currentColor / fill inheritance issues on iOS
+        sendBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
         sendBtn.addEventListener('click', () => this.sendMessage());
     }
 
@@ -304,25 +305,50 @@ class VaultAssistantView extends ItemView {
         if (this.scope === 'note') {
             if (active) files = [active];
         } else if (this.scope === 'folder') {
-            const fp = this.folderPath ?? active?.parent?.path ?? null;
-            if (fp === '' || fp === '/') {
+            // Trim any accidental trailing slash so startsWith never uses double-slash
+            const rawFp = this.folderPath ?? active?.parent?.path ?? null;
+            const fp = rawFp !== null ? rawFp.replace(/\/+$/, '') : null;
+            if (fp === '' || fp === null) {
+                // Vault root selected or no folder resolved — include everything
                 files = vault.getMarkdownFiles();
-            } else if (fp !== null) {
-                files = vault.getMarkdownFiles().filter(f => f.path.startsWith(fp + '/'));
+            } else {
+                // Include files directly in this folder (fp/file.md) AND all subfolders (fp/sub/file.md)
+                files = vault.getMarkdownFiles().filter(f =>
+                    f.path === fp + '/' ||          // shouldn't happen but guard
+                    f.path.startsWith(fp + '/')
+                );
             }
         } else if (this.scope === 'vault') {
             files = vault.getMarkdownFiles();
         }
 
-        const CHAR_LIMIT = 50000;
+        // Sort: files directly inside the chosen folder first, deeper nesting after, then alpha
+        if (this.scope === 'folder' && files.length > 1) {
+            files = [...files].sort((a, b) => {
+                const da = a.path.split('/').length;
+                const db = b.path.split('/').length;
+                if (da !== db) return da - db;       // shallower first
+                return a.path.localeCompare(b.path); // alpha within same depth
+            });
+        }
+
+        const CHAR_LIMIT = 100000;
         const scopeLabel = this.scope === 'folder' && this.folderPath
             ? (this.folderPath.split('/').pop() || 'root')
             : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
 
         let context = `[VAULT SCOPE — ${scopeLabel}]\n`;
         if (activePath) context += `[ACTIVE NOTE — ${activePath}]\n`;
+
+        // Always list every file path so Claude knows what exists, even if content is truncated
+        if (files.length > 0) {
+            context += `[FILES IN SCOPE — ${files.length} note${files.length === 1 ? '' : 's'}]\n`;
+            files.forEach(f => { context += `  • ${f.path}\n`; });
+        }
         context += '\n';
-        let total = 0;
+
+        let total = context.length;
+        let loaded = 0;
         let truncated = false;
 
         for (const file of files) {
@@ -331,9 +357,10 @@ class VaultAssistantView extends ItemView {
             if (total + entry.length > CHAR_LIMIT) { truncated = true; break; }
             context += entry;
             total += entry.length;
+            loaded++;
         }
 
-        if (truncated) context += '[Context truncated to fit token limit]\n';
+        if (truncated) context += `[Content truncated — ${loaded} of ${files.length} files fully loaded. Use Note scope for large files.]\n`;
         if (files.length === 0) context += '(No files in scope or no active note)\n';
 
         return { context, activePath };
