@@ -63,6 +63,57 @@ const VAULT_TOOLS = [
             required: ['query'],
         },
     },
+    {
+        name: 'edit_note',
+        description: 'Propose writing new content to an existing note. Always call read_note first so your rewrite is based on the current content. The user will see a confirmation button before the change is saved.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path:    { type: 'string', description: 'Full vault path of the note to edit' },
+                content: { type: 'string', description: 'Complete new content for the note' },
+                summary: { type: 'string', description: 'One-line description of what changed, shown to the user' },
+            },
+            required: ['path', 'content', 'summary'],
+        },
+    },
+    {
+        name: 'create_note',
+        description: 'Propose creating a new note. The user will see a confirmation button before the file is saved.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path:    { type: 'string', description: 'Full vault path for the new note, e.g. "Projects/New Idea.md"' },
+                content: { type: 'string', description: 'Content of the new note' },
+                summary: { type: 'string', description: 'One-line description, shown to the user' },
+            },
+            required: ['path', 'content', 'summary'],
+        },
+    },
+    {
+        name: 'rename_note',
+        description: 'Propose renaming or moving a note to a new path. The user will confirm before it happens.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path:     { type: 'string', description: 'Current full vault path of the note' },
+                new_path: { type: 'string', description: 'New full vault path' },
+                summary:  { type: 'string', description: 'One-line description, shown to the user' },
+            },
+            required: ['path', 'new_path', 'summary'],
+        },
+    },
+    {
+        name: 'delete_note',
+        description: 'Propose deleting a note. The user must explicitly confirm before deletion.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                path:    { type: 'string', description: 'Full vault path of the note to delete' },
+                summary: { type: 'string', description: 'One-line reason, shown to the user' },
+            },
+            required: ['path', 'summary'],
+        },
+    },
 ];
 
 // ─── Main Plugin ─────────────────────────────────────────────────────────────
@@ -108,11 +159,12 @@ class VaultAssistantPlugin extends Plugin {
 class VaultAssistantView extends ItemView {
     constructor(leaf, plugin) {
         super(leaf);
-        this.plugin     = plugin;
-        this.messages   = [];   // display-only: [{role, content: string}]
-        this.apiHistory = [];   // full API history including tool_use blocks
-        this.scope      = 'note';
-        this.folderPath = null;
+        this.plugin      = plugin;
+        this.messages    = [];   // display-only: [{role, content: string}]
+        this.apiHistory  = [];   // full API history including tool_use blocks
+        this.pendingEdit = null; // write operation proposed by a tool, awaiting Apply/Discard
+        this.scope       = 'note';
+        this.folderPath  = null;
     }
 
     getViewType()    { return VIEW_TYPE; }
@@ -415,42 +467,30 @@ class VaultAssistantView extends ItemView {
     buildSystemPrompt(context, activePath) {
         return `You are Vault Assistant, an AI embedded in the user's Obsidian vault. Help them read, edit, organise, and understand their notes through natural conversation — like a pair programmer but for notes.
 
-TOOLS AVAILABLE:
-You have three vault tools: read_note, list_folder, search_notes.
-- Before answering any question about a note's content, call read_note to fetch it.
-- Before editing a note, call read_note first so you have the current content.
-- Use search_notes when the user asks about a topic and you need to find the right file.
-- Use list_folder to explore an unfamiliar folder structure.
-- You may call tools multiple times and chain them freely within a single response.
+TOOLS — use these for everything vault-related:
 
-CAPABILITIES:
-- Summarise, analyse, rewrite, translate, extend, or restructure any note
-- Adjust tone: shorter, longer, more formal, more casual
-- Extract action items, key decisions, or themes across multiple notes
-- Compare notes, spot patterns, suggest connections
-- Create new notes or organise existing ones
-- Answer questions grounded in the actual vault content
+READ TOOLS (call freely, no confirmation needed):
+- read_note      → fetch a note's content. Always call this before editing.
+- list_folder    → list notes and subfolders at a path.
+- search_notes   → full-text search. Use when you need to find the right file first.
 
-WRITING CHANGES TO THE VAULT — use this exact format:
+WRITE TOOLS (each proposes a change the user must confirm before it is saved):
+- edit_note      → rewrite an existing note. MUST call read_note first.
+- create_note    → create a new note.
+- rename_note    → rename or move a note.
+- delete_note    → delete a note (user must confirm explicitly).
 
-<claude-edit>
-{"action":"edit","path":"folder/note.md","content":"full new content"}
-</claude-edit>
+WORKFLOW:
+- Chain tools freely. Example: search → read → edit.
+- You may call multiple read tools in one response before calling a write tool.
+- Only call ONE write tool per response (one pending change at a time).
 
-Supported actions:
-- edit   → overwrite an existing note (requires "path" and "content")
-- create → create a new note        (requires "path" and "content")
-- rename → rename / move a note     (requires "path" and "newPath")
-- delete → delete a note            (requires "path") — user must confirm
-
-CRITICAL RULES:
+RULES:
 - Active note: ${activePath ? `"${activePath}"` : 'none'}. Use this exact path when the user refers to "this note" or "the current note".
-- Always read a note before editing it so your rewrite is based on the real content.
-- When the user asks to edit, rewrite, improve, translate, or restructure a note → MUST use <claude-edit>. Do not show the result as chat text only.
-- When creating a new note → MUST use <claude-edit> with action "create".
-- For answers, summaries, analysis shown in chat only → plain text, no <claude-edit>.
-- One <claude-edit> block per response, placed at the very end.
-- Use the full vault path exactly as listed in the index below.
+- When the user asks to edit, rewrite, improve, translate, restructure, or update a note → call edit_note with the full new content. Never just show the result as chat text.
+- When the user asks to create a note → call create_note.
+- For answers, summaries, analysis, and discussion with no file change → respond in plain text only, no write tools.
+- Use the full vault path exactly as listed in the file index below.
 
 VAULT CONTEXT:
 ${context}`;
@@ -501,7 +541,22 @@ ${context}`;
                 // Final text response — store in apiHistory and return text to caller
                 this.apiHistory.push({ role: 'assistant', content });
                 const textBlock = content.find(b => b.type === 'text');
-                return textBlock?.text ?? '';
+                let reply = textBlock?.text ?? '';
+
+                // If a write tool was called, attach a <claude-edit> block so
+                // renderMessage shows the Apply / Discard buttons as normal
+                if (this.pendingEdit) {
+                    const edit = this.pendingEdit;
+                    this.pendingEdit = null;
+                    const editJson = JSON.stringify(
+                        edit.action === 'rename'
+                            ? { action: edit.action, path: edit.path, newPath: edit.newPath }
+                            : { action: edit.action, path: edit.path, content: edit.content }
+                    );
+                    reply += `\n\n<claude-edit>${editJson}</claude-edit>`;
+                }
+
+                return reply;
             }
 
             if (stopReason === 'tool_use') {
@@ -637,6 +692,35 @@ ${context}`;
                 if (r.excerpt)  lines.push(`   "…${r.excerpt}…"`);
                 return lines.join('\n');
             }).join('\n\n') + (results.length > 20 ? `\n\n…and ${results.length - 20} more.` : '');
+        }
+
+        // ── write tools — store as pendingEdit, user confirms via Apply button ──
+
+        if (toolName === 'edit_note') {
+            const { path, content, summary } = toolInput;
+            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
+            this.pendingEdit = { action: 'edit', path, content, summary };
+            return `Proposed edit ready: "${summary}". Waiting for user to Apply or Discard.`;
+        }
+
+        if (toolName === 'create_note') {
+            const { path, content, summary } = toolInput;
+            this.pendingEdit = { action: 'create', path, content, summary };
+            return `Proposed new note ready: "${summary}". Waiting for user to Apply or Discard.`;
+        }
+
+        if (toolName === 'rename_note') {
+            const { path, new_path, summary } = toolInput;
+            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
+            this.pendingEdit = { action: 'rename', path, newPath: new_path, summary };
+            return `Proposed rename ready: "${summary}". Waiting for user to Apply or Discard.`;
+        }
+
+        if (toolName === 'delete_note') {
+            const { path, summary } = toolInput;
+            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
+            this.pendingEdit = { action: 'delete', path, summary };
+            return `Proposed deletion ready: "${summary}". Waiting for user to confirm.`;
         }
 
         return `Error: Unknown tool "${toolName}".`;
@@ -851,8 +935,9 @@ ${context}`;
     }
 
     clearMessages() {
-        this.messages   = [];
-        this.apiHistory = [];
+        this.messages    = [];
+        this.apiHistory  = [];
+        this.pendingEdit = null;
         if (this.messagesEl) {
             this.messagesEl.empty();
             this.buildEmptyState();
