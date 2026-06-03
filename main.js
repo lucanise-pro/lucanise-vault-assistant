@@ -448,6 +448,7 @@ class VaultAssistantView extends ItemView {
         return [];
     }
 
+    // Scope check for READ tools — restricts what Claude can access
     isInScope(filePath) {
         if (this.scope === 'vault') return true;
         if (this.scope === 'folder') {
@@ -457,40 +458,46 @@ class VaultAssistantView extends ItemView {
             return filePath.startsWith(fp + '/');
         }
         if (this.scope === 'note') {
+            // In note scope still allow reading the active note
             return filePath === (this.app.workspace.getActiveFile()?.path ?? '');
         }
         return false;
     }
 
+    // Write operations are never scope-blocked — scope controls what Claude reads,
+    // not where it can save. Creating a note should work regardless of scope.
+    isWritable() { return true; }
+
     // ── System Prompt ─────────────────────────────────────────────────────────
 
     buildSystemPrompt(context, activePath) {
-        return `You are Vault Assistant, an AI embedded in the user's Obsidian vault. Help them read, edit, organise, and understand their notes through natural conversation — like a pair programmer but for notes.
+        return `You are Vault Assistant, an AI embedded in the user's Obsidian vault. You have direct vault access through tools — use them.
 
-TOOLS — use these for everything vault-related:
+TOOLS:
 
-READ TOOLS (call freely, no confirmation needed):
-- read_note      → fetch a note's content. Always call this before editing.
-- list_folder    → list notes and subfolders at a path.
-- search_notes   → full-text search. Use when you need to find the right file first.
+READ (no confirmation, call freely):
+- read_note(path)               → fetch a note's full content
+- list_folder(folder_path)      → list notes and subfolders at a path
+- search_notes(query)           → full-text search with excerpts
 
-WRITE TOOLS (each proposes a change the user must confirm before it is saved):
-- edit_note      → rewrite an existing note. MUST call read_note first.
-- create_note    → create a new note.
-- rename_note    → rename or move a note.
-- delete_note    → delete a note (user must confirm explicitly).
+WRITE (each stores a proposal; the plugin shows an Apply button the user taps to save):
+- edit_note(path, content, summary)          → overwrite an existing note
+- create_note(path, content, summary)        → create a new note at any path
+- rename_note(path, new_path, summary)       → rename or move a note
+- delete_note(path, summary)                 → mark a note for deletion (user confirms)
 
-WORKFLOW:
-- Chain tools freely. Example: search → read → edit.
-- You may call multiple read tools in one response before calling a write tool.
-- Only call ONE write tool per response (one pending change at a time).
+HOW WRITE TOOLS WORK:
+When you call a write tool, the plugin immediately stores the proposal and shows the user an "Apply" button. When tapped, the file is saved. You DO have the ability to write files — through these tools. Always use them.
 
-RULES:
-- Active note: ${activePath ? `"${activePath}"` : 'none'}. Use this exact path when the user refers to "this note" or "the current note".
-- When the user asks to edit, rewrite, improve, translate, restructure, or update a note → call edit_note with the full new content. Never just show the result as chat text.
-- When the user asks to create a note → call create_note.
-- For answers, summaries, analysis, and discussion with no file change → respond in plain text only, no write tools.
-- Use the full vault path exactly as listed in the file index below.
+STRICT RULES:
+- NEVER say you cannot write files or edit notes. You can — call the write tools.
+- NEVER output a \`<claude-edit>\` block in your text response. Those are not used here.
+- NEVER ask the user to copy-paste content manually.
+- When asked to edit/rewrite/translate/improve a note → call read_note first, then edit_note.
+- When asked to create a note → call create_note directly.
+- Only one write tool per response turn.
+- Active note: ${activePath ? `"${activePath}"` : 'none'}. Use this exact path for the current note.
+- For chat-only answers (summaries, analysis, questions) with no file change → plain text, no write tools.
 
 VAULT CONTEXT:
 ${context}`;
@@ -698,29 +705,26 @@ ${context}`;
 
         if (toolName === 'edit_note') {
             const { path, content, summary } = toolInput;
-            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
             this.pendingEdit = { action: 'edit', path, content, summary };
-            return `Proposed edit ready: "${summary}". Waiting for user to Apply or Discard.`;
+            return `Edit proposal stored for "${path}". The Apply button will appear in the chat for the user to confirm.`;
         }
 
         if (toolName === 'create_note') {
             const { path, content, summary } = toolInput;
             this.pendingEdit = { action: 'create', path, content, summary };
-            return `Proposed new note ready: "${summary}". Waiting for user to Apply or Discard.`;
+            return `Create proposal stored for "${path}". The Apply button will appear in the chat for the user to confirm.`;
         }
 
         if (toolName === 'rename_note') {
             const { path, new_path, summary } = toolInput;
-            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
             this.pendingEdit = { action: 'rename', path, newPath: new_path, summary };
-            return `Proposed rename ready: "${summary}". Waiting for user to Apply or Discard.`;
+            return `Rename proposal stored: "${path}" → "${new_path}". The Apply button will appear for the user to confirm.`;
         }
 
         if (toolName === 'delete_note') {
             const { path, summary } = toolInput;
-            if (!this.isInScope(path)) return `Error: "${path}" is outside scope.`;
             this.pendingEdit = { action: 'delete', path, summary };
-            return `Proposed deletion ready: "${summary}". Waiting for user to confirm.`;
+            return `Delete proposal stored for "${path}". The user will be asked to confirm before deletion.`;
         }
 
         return `Error: Unknown tool "${toolName}".`;
