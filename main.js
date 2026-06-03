@@ -22,7 +22,7 @@ const VIEW_TYPE = 'vault-assistant-view';
 const DEFAULT_SETTINGS = {
     apiKey: '',
     model: 'claude-sonnet-4-6',
-    maxTokens: 2048,
+    maxTokens: 4096,   // 2048 is too low for full note rewrites
     savedNotesFolder: '',
 };
 
@@ -385,6 +385,7 @@ class VaultAssistantView extends ItemView {
             this.renderMessage(assistantMsg, true);
         } catch (err) {
             loadingEl.remove();
+            this.pendingEdit = null; // discard any stale write proposal on error
             new Notice('Claude error: ' + (err.message || 'Unknown error'));
         }
 
@@ -448,18 +449,19 @@ class VaultAssistantView extends ItemView {
         return [];
     }
 
-    // Scope check for READ tools — restricts what Claude can access
+    // Scope check for READ tools.
+    // Note scope: pre-loads only the active note as context, but tool reads are unrestricted —
+    // if the user explicitly asks Claude to read another file it should be able to.
+    // Folder scope: restricts tool reads to the selected folder tree.
+    // Vault scope: unrestricted.
     isInScope(filePath) {
         if (this.scope === 'vault') return true;
+        if (this.scope === 'note')  return true; // context is scoped; tool reads are not
         if (this.scope === 'folder') {
             const rawFp = this.folderPath ?? this.app.workspace.getActiveFile()?.parent?.path ?? '';
             const fp = rawFp.replace(/\/+$/, '');
             if (!fp) return true;
             return filePath.startsWith(fp + '/');
-        }
-        if (this.scope === 'note') {
-            // In note scope still allow reading the active note
-            return filePath === (this.app.workspace.getActiveFile()?.path ?? '');
         }
         return false;
     }
@@ -590,6 +592,14 @@ ${context}`;
                 continue;
             }
 
+            if (stopReason === 'max_tokens') {
+                // Hit token limit — return what we have with a warning appended
+                this.apiHistory.push({ role: 'assistant', content });
+                const textBlock = content.find(b => b.type === 'text');
+                const partial = textBlock?.text ?? '';
+                return partial + '\n\n*(Response cut short — increase Max Tokens in plugin settings)*';
+            }
+
             // Unexpected stop_reason — return whatever text we got
             const textBlock = content.find(b => b.type === 'text');
             return textBlock?.text ?? '';
@@ -710,13 +720,16 @@ ${context}`;
         }
 
         if (toolName === 'create_note') {
-            const { path, content, summary } = toolInput;
+            const { content, summary } = toolInput;
+            // Ensure .md extension
+            const path = toolInput.path.endsWith('.md') ? toolInput.path : toolInput.path + '.md';
             this.pendingEdit = { action: 'create', path, content, summary };
             return `Create proposal stored for "${path}". The Apply button will appear in the chat for the user to confirm.`;
         }
 
         if (toolName === 'rename_note') {
-            const { path, new_path, summary } = toolInput;
+            const { path, summary } = toolInput;
+            const new_path = toolInput.new_path.endsWith('.md') ? toolInput.new_path : toolInput.new_path + '.md';
             this.pendingEdit = { action: 'rename', path, newPath: new_path, summary };
             return `Rename proposal stored: "${path}" → "${new_path}". The Apply button will appear for the user to confirm.`;
         }
@@ -746,6 +759,17 @@ ${context}`;
             labelEl.textContent = ` Listing ${toolInput?.folder_path || 'vault'}…`;
         } else if (toolName === 'search_notes') {
             labelEl.textContent = ` Searching "${toolInput?.query}"…`;
+        } else if (toolName === 'edit_note') {
+            const name = (toolInput?.path || '').split('/').pop();
+            labelEl.textContent = ` Preparing edit: ${name}…`;
+        } else if (toolName === 'create_note') {
+            const name = (toolInput?.path || '').split('/').pop();
+            labelEl.textContent = ` Preparing: ${name}…`;
+        } else if (toolName === 'rename_note') {
+            labelEl.textContent = ` Preparing rename…`;
+        } else if (toolName === 'delete_note') {
+            const name = (toolInput?.path || '').split('/').pop();
+            labelEl.textContent = ` Preparing delete: ${name}…`;
         }
     }
 
