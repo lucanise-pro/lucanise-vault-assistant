@@ -384,9 +384,12 @@ class VaultAssistantView extends ItemView {
             const reply        = await this.callClaude(systemPrompt, loadingEl);
 
             loadingEl.remove();
-            const assistantMsg = { role: 'assistant', content: reply };
+            // Grab any pending edit proposal and attach directly to the message —
+            // avoids JSON serialisation of note content (which caused "weird signs")
+            const editProposal   = this.pendingEdit ?? null;
+            this.pendingEdit     = null;
+            const assistantMsg   = { role: 'assistant', content: reply, editProposal };
             this.messages.push(assistantMsg);
-            // apiHistory already updated inside callClaude
             this.renderMessage(assistantMsg, true);
         } catch (err) {
             loadingEl.remove();
@@ -569,25 +572,11 @@ ${context}`;
             const content    = data.content || [];
 
             if (stopReason === 'end_turn' || stopReason === 'stop_sequence') {
-                // Final text response — store in apiHistory and return text to caller
                 this.apiHistory.push({ role: 'assistant', content });
                 const textBlock = content.find(b => b.type === 'text');
-                let reply = textBlock?.text ?? '';
-
-                // If a write tool was called, attach a <claude-edit> block so
-                // renderMessage shows the Apply / Discard buttons as normal
-                if (this.pendingEdit) {
-                    const edit = this.pendingEdit;
-                    this.pendingEdit = null;
-                    const editJson = JSON.stringify(
-                        edit.action === 'rename'
-                            ? { action: edit.action, path: edit.path, newPath: edit.newPath }
-                            : { action: edit.action, path: edit.path, content: edit.content }
-                    );
-                    reply += `\n\n<claude-edit>${editJson}</claude-edit>`;
-                }
-
-                return reply;
+                // pendingEdit is NOT injected here — stored directly on the message
+                // object in sendMessage to avoid any JSON serialisation of note content
+                return textBlock?.text ?? '';
             }
 
             if (stopReason === 'tool_use') {
@@ -920,7 +909,8 @@ ${context}`;
 
     renderMessage(msg, withActions) {
         this.hideEmptyState();
-        const isUser      = msg.role === 'user';
+        const isUser = msg.role === 'user';
+
         // Group consecutive same-sender messages closer together
         const allWrappers = this.messagesEl.querySelectorAll('.va-msg-wrapper');
         const lastWrapper = allWrappers[allWrappers.length - 1];
@@ -929,64 +919,122 @@ ${context}`;
             'va-msg-wrapper ' + (isUser ? 'va-user-wrapper' : 'va-assistant-wrapper') +
             (lastRole ? ' va-grouped' : '')
         );
-        const editBlock   = !isUser ? this.parseEditBlock(msg.content) : null;
+
+        // editProposal is stored directly on the message (no JSON round-trip)
+        // Fall back to parseEditBlock only for legacy messages loaded from history
+        const editProposal = !isUser
+            ? (msg.editProposal ?? this.parseEditBlock(msg.content))
+            : null;
         const displayText = !isUser ? this.stripEditBlock(msg.content) : msg.content;
 
-        const bubble = wrapper.createDiv('va-bubble ' + (isUser ? 'va-user-bubble' : 'va-assistant-bubble'));
-
-        if (isUser) {
-            bubble.createDiv({ cls: 'va-bubble-text', text: displayText });
-        } else {
-            const mdEl = bubble.createDiv('va-bubble-text va-markdown');
-            MarkdownRenderer.render(this.app, displayText, mdEl, '', this);
+        // ── Text bubble ──────────────────────────────────────────────────────
+        if (displayText) {
+            const bubble = wrapper.createDiv('va-bubble ' + (isUser ? 'va-user-bubble' : 'va-assistant-bubble'));
+            if (isUser) {
+                bubble.createDiv({ cls: 'va-bubble-text', text: displayText });
+            } else {
+                const mdEl = bubble.createDiv('va-bubble-text va-markdown');
+                MarkdownRenderer.render(this.app, displayText, mdEl, '', this);
+            }
         }
 
         if (!isUser && withActions) {
-            const actionsEl = wrapper.createDiv('va-actions');
-
-            // Copy button
-            const copyBtn = actionsEl.createEl('button', { text: 'Copy', cls: 'va-pill-btn' });
-            copyBtn.addEventListener('click', () => {
-                const done = () => {
-                    copyBtn.textContent = '✓ Copied';
-                    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-                };
-                if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(displayText).then(done).catch(() => { this.fallbackCopy(displayText); done(); });
-                } else {
-                    this.fallbackCopy(displayText); done();
-                }
-            });
-
-            if (editBlock) {
-                const targetName = editBlock.path
-                    ? editBlock.path.split('/').pop()
-                    : this.app.workspace.getActiveFile()?.name ?? 'note';
-                const applyLabel = editBlock.action === 'create'
-                    ? `Create ${targetName}`
-                    : editBlock.action === 'delete'
-                    ? `Delete ${targetName}`
-                    : `Apply → ${targetName}`;
-
-                const applyBtn   = actionsEl.createEl('button', { text: applyLabel, cls: 'va-pill-btn va-pill-primary' });
-                const discardBtn = actionsEl.createEl('button', { text: 'Discard',  cls: 'va-pill-btn' });
-
-                applyBtn.addEventListener('click', async () => {
-                    applyBtn.disabled = true;
-                    discardBtn.disabled = true;
-                    await this.applyEdit(editBlock, actionsEl);
-                });
-                discardBtn.addEventListener('click', () => {
-                    actionsEl.empty();
-                    actionsEl.createEl('span', { text: 'Discarded', cls: 'va-status-label' });
-                });
+            // ── Edit proposal card ───────────────────────────────────────────
+            if (editProposal) {
+                this.renderProposalCard(wrapper, editProposal);
             } else {
+                // ── Standard action pills ────────────────────────────────────
+                const actionsEl = wrapper.createDiv('va-actions');
+
+                const copyBtn = actionsEl.createEl('button', { text: 'Copy', cls: 'va-pill-btn' });
+                copyBtn.addEventListener('click', () => {
+                    const done = () => { copyBtn.textContent = '✓ Copied'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); };
+                    navigator.clipboard?.writeText
+                        ? navigator.clipboard.writeText(displayText).then(done).catch(() => { this.fallbackCopy(displayText); done(); })
+                        : (this.fallbackCopy(displayText), done());
+                });
+
                 const saveBtn = actionsEl.createEl('button', { text: 'New note', cls: 'va-pill-btn' });
                 const addBtn  = actionsEl.createEl('button', { text: 'Append',   cls: 'va-pill-btn' });
-
                 saveBtn.addEventListener('click', () => this.saveAsNote(displayText));
                 addBtn.addEventListener('click',  () => this.addToNote(displayText));
             }
+        }
+    }
+
+    renderProposalCard(wrapper, proposal) {
+        const card = wrapper.createDiv('va-proposal');
+
+        // ── Header ────────────────────────────────────────────────────────────
+        const header = card.createDiv('va-proposal-header');
+        const targetName = (proposal.path || proposal.newPath || '').split('/').pop() || 'note';
+        const icon = proposal.action === 'create' ? '📄'
+                   : proposal.action === 'delete' ? '🗑'
+                   : proposal.action === 'rename' ? '↔'
+                   : '✏️';
+        const actionLabel = proposal.action === 'create' ? 'Create'
+                          : proposal.action === 'delete' ? 'Delete'
+                          : proposal.action === 'rename' ? `Rename → ${(proposal.newPath || '').split('/').pop()}`
+                          : 'Edit';
+
+        header.createDiv({ cls: 'va-proposal-title', text: `${icon} ${actionLabel}: ${targetName}` });
+        if (proposal.summary) {
+            header.createDiv({ cls: 'va-proposal-summary', text: proposal.summary });
+        }
+
+        // ── Content preview (edit / create only) ─────────────────────────────
+        if (proposal.content && proposal.action !== 'delete') {
+            const previewEl = card.createDiv('va-proposal-preview');
+            const previewText = previewEl.createDiv('va-proposal-preview-text');
+            // Show first 300 chars as plain text snippet
+            const snippet = proposal.content.slice(0, 300);
+            previewText.textContent = snippet + (proposal.content.length > 300 ? '…' : '');
+            // Fade + tap-to-expand
+            const fade = previewEl.createDiv('va-proposal-fade');
+            let expanded = false;
+            previewEl.addEventListener('click', () => {
+                expanded = !expanded;
+                previewEl.classList.toggle('va-proposal-expanded', expanded);
+                fade.style.display = expanded ? 'none' : '';
+                if (expanded) {
+                    // Show more content
+                    previewText.textContent = proposal.content.length > 1200
+                        ? proposal.content.slice(0, 1200) + '\n…'
+                        : proposal.content;
+                } else {
+                    previewText.textContent = snippet + (proposal.content.length > 300 ? '…' : '');
+                }
+            });
+        }
+
+        // ── Actions ───────────────────────────────────────────────────────────
+        const actionsEl = card.createDiv('va-proposal-actions');
+
+        if (proposal.action === 'delete') {
+            const confirmBtn = actionsEl.createEl('button', { text: `Delete ${targetName}`, cls: 'va-pill-btn va-pill-danger' });
+            const cancelBtn  = actionsEl.createEl('button', { text: 'Cancel', cls: 'va-pill-btn' });
+            confirmBtn.addEventListener('click', async () => {
+                confirmBtn.disabled = true; cancelBtn.disabled = true;
+                await this.applyEdit(proposal, actionsEl);
+            });
+            cancelBtn.addEventListener('click', () => {
+                actionsEl.empty();
+                actionsEl.createEl('span', { text: 'Cancelled', cls: 'va-status-label' });
+            });
+        } else {
+            const applyLabel = proposal.action === 'create' ? `Create ${targetName}`
+                             : proposal.action === 'rename' ? 'Rename'
+                             : `Apply`;
+            const applyBtn   = actionsEl.createEl('button', { text: applyLabel, cls: 'va-pill-btn va-pill-primary' });
+            const discardBtn = actionsEl.createEl('button', { text: 'Discard', cls: 'va-pill-btn' });
+            applyBtn.addEventListener('click', async () => {
+                applyBtn.disabled = true; discardBtn.disabled = true;
+                await this.applyEdit(proposal, actionsEl);
+            });
+            discardBtn.addEventListener('click', () => {
+                actionsEl.empty();
+                actionsEl.createEl('span', { text: 'Discarded', cls: 'va-status-label' });
+            });
         }
     }
 
@@ -1333,7 +1381,7 @@ class VaultAssistantSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Max Tokens')
-            .setDesc('Maximum length of Claude\'s response (256–8192).')
+            .setDesc('Maximum output tokens per response. Raise if edits are cut short (large notes need 8192+).')
             .addSlider(slider => slider
                 .setLimits(256, 16384, 256)
                 .setValue(this.plugin.settings.maxTokens)
@@ -1356,13 +1404,26 @@ class VaultAssistantSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('Clear Conversation')
-            .setDesc('Wipe the current chat history.')
+            .setDesc('Wipe the current chat history and note cache.')
             .addButton(btn => btn
                 .setButtonText('Clear')
                 .setWarning()
                 .onClick(() => {
                     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
                     leaves.forEach(leaf => leaf.view?.clearMessages?.());
+                }));
+
+        new Setting(containerEl)
+            .setName('Clear Note Cache')
+            .setDesc('Force Claude to re-read files from disk. Use if responses seem stale or based on old content.')
+            .addButton(btn => btn
+                .setButtonText('Clear cache')
+                .onClick(() => {
+                    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+                    leaves.forEach(leaf => {
+                        if (leaf.view?.noteCache) leaf.view.noteCache.clear();
+                    });
+                    new Notice('Note cache cleared — files will be re-read fresh.');
                 }));
     }
 }
