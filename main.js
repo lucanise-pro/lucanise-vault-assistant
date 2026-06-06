@@ -22,7 +22,7 @@ const VIEW_TYPE = 'vault-assistant-view';
 const DEFAULT_SETTINGS = {
     apiKey: '',
     model: 'claude-sonnet-4-6',
-    maxTokens: 4096,   // 2048 is too low for full note rewrites
+    maxTokens: 8192,   // needs to be high enough for full note rewrites via tool
     savedNotesFolder: '',
 };
 
@@ -534,13 +534,20 @@ ${context}`;
                     'Content-Type': 'application/json',
                     'x-api-key': this.plugin.settings.apiKey,
                     'anthropic-version': '2023-06-01',
+                    'anthropic-beta': 'prompt-caching-2024-07-31', // ~80% discount on repeated tokens
                 },
                 body: JSON.stringify({
                     model:      this.plugin.settings.model,
                     max_tokens: this.plugin.settings.maxTokens,
-                    system:     systemPrompt,
-                    messages:   this.getApiMessages(), // compressed for token efficiency
-                    tools:      VAULT_TOOLS,
+                    // System as array → enables prompt caching (Anthropic caches blocks ≥ 1024 tokens)
+                    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+                    messages:   this.getApiMessages(),
+                    // Mark last tool so Anthropic caches the whole static tools definition
+                    tools: VAULT_TOOLS.map((t, i) =>
+                        i === VAULT_TOOLS.length - 1
+                            ? { ...t, cache_control: { type: 'ephemeral' } }
+                            : t
+                    ),
                 }),
                 throw: false,
             });
@@ -765,40 +772,94 @@ ${context}`;
         return `Error: Unknown tool "${toolName}".`;
     }
 
-    // ── API History Compression ───────────────────────────────────────────────
-    // Keeps the last KEEP_FULL_ROUNDS tool exchanges intact; compresses older
-    // read_note results to a short stub so they don't burn tokens in long chats.
+    // ── API History Compression + Sliding Window ──────────────────────────────
+    //
+    // Strategy:
+    //   1. Identify "turn boundaries" — user messages with string content
+    //      (tool_result messages have array content, so they're easy to distinguish)
+    //   2. Keep first turn (has file index) + last MAX_TURNS turns; drop middle
+    //   3. Within kept turns, compress old tool results and long assistant text
+    //
     getApiMessages() {
-        const KEEP_FULL_ROUNDS = 3; // keep last 3 tool-use/result pairs in full
+        const MAX_TURNS      = 6;  // max conversation turns to keep in full
+        const MAX_ASST_CHARS = 600; // compress older assistant text beyond this
+        const KEEP_TOOL_FULL = 3;  // keep last N tool-result rounds uncompressed
 
-        // Walk backwards and find tool_result messages, counting from newest
-        let toolRoundsSeen = 0;
-        const compressOlder = new Set();
-
-        for (let i = this.apiHistory.length - 1; i >= 0; i--) {
-            const msg = this.apiHistory[i];
-            if (msg.role === 'user' && Array.isArray(msg.content) &&
-                msg.content[0]?.type === 'tool_result') {
-                toolRoundsSeen++;
-                if (toolRoundsSeen > KEEP_FULL_ROUNDS) compressOlder.add(i);
+        // ── Step 1: find turn boundaries (user text messages, not tool results) ──
+        const turnStarts = []; // indices of user text messages
+        for (let i = 0; i < this.apiHistory.length; i++) {
+            const m = this.apiHistory[i];
+            if (m.role === 'user' && typeof m.content === 'string') {
+                turnStarts.push(i);
             }
         }
 
-        if (compressOlder.size === 0) return this.apiHistory; // nothing to compress
+        // ── Step 2: sliding window — keep first + last MAX_TURNS ──────────────
+        let keepIndices = null; // null = keep all
+        if (turnStarts.length > MAX_TURNS + 1) {
+            const keepTurns = new Set();
+            keepTurns.add(0); // always keep first turn start
+            // keep last MAX_TURNS turns
+            turnStarts.slice(-MAX_TURNS).forEach(t => keepTurns.add(t));
 
-        return this.apiHistory.map((msg, i) => {
-            if (!compressOlder.has(i)) return msg;
-            // Compress read_note results older than KEEP_FULL_ROUNDS
-            const compressed = msg.content.map(block => {
-                if (block.type !== 'tool_result') return block;
-                const text = typeof block.content === 'string' ? block.content : '';
-                if (!text.startsWith('File:')) return block; // not a read result
-                const chars = text.length;
-                const firstLine = text.split('\n')[0];
-                return { ...block, content: `${firstLine} [content omitted — ${chars} chars, re-read if needed]` };
+            // Build the set of message indices to keep
+            keepIndices = new Set();
+            const sortedTurns = [...keepTurns].sort((a, b) => a - b);
+            sortedTurns.forEach((start, si) => {
+                const end = si + 1 < sortedTurns.length ? sortedTurns[si + 1] : this.apiHistory.length;
+                for (let i = start; i < end; i++) keepIndices.add(i);
             });
-            return { ...msg, content: compressed };
-        });
+        }
+
+        // ── Step 3: build indices of old tool rounds to compress ───────────────
+        let toolRoundsSeen = 0;
+        const compressToolResult = new Set();
+        const compressAssistant  = new Set();
+        for (let i = this.apiHistory.length - 1; i >= 0; i--) {
+            const m = this.apiHistory[i];
+            if (m.role === 'user' && Array.isArray(m.content) &&
+                m.content[0]?.type === 'tool_result') {
+                toolRoundsSeen++;
+                if (toolRoundsSeen > KEEP_TOOL_FULL) {
+                    compressToolResult.add(i);
+                    if (i > 0) compressAssistant.add(i - 1);
+                }
+            }
+        }
+
+        // ── Step 4: build final message array ─────────────────────────────────
+        const result = [];
+        for (let i = 0; i < this.apiHistory.length; i++) {
+            if (keepIndices && !keepIndices.has(i)) continue; // sliding window drop
+
+            let msg = this.apiHistory[i];
+
+            // Compress old tool results (read_note content)
+            if (compressToolResult.has(i) && Array.isArray(msg.content)) {
+                const compressed = msg.content.map(block => {
+                    if (block.type !== 'tool_result') return block;
+                    const text = typeof block.content === 'string' ? block.content : '';
+                    if (!text.startsWith('File:')) return block;
+                    const firstLine = text.split('\n')[0];
+                    return { ...block, content: `${firstLine} [omitted — use read_note to re-fetch if needed]` };
+                });
+                msg = { ...msg, content: compressed };
+            }
+
+            // Compress old assistant text blocks
+            if (compressAssistant.has(i) && Array.isArray(msg.content)) {
+                const compressed = msg.content.map(block => {
+                    if (block.type !== 'text') return block;
+                    if (block.text.length <= MAX_ASST_CHARS) return block;
+                    return { ...block, text: block.text.slice(0, MAX_ASST_CHARS) + '… [truncated]' };
+                });
+                msg = { ...msg, content: compressed };
+            }
+
+            result.push(msg);
+        }
+
+        return result;
     }
 
     // ── Loading Label ─────────────────────────────────────────────────────────
@@ -1274,7 +1335,7 @@ class VaultAssistantSettingTab extends PluginSettingTab {
             .setName('Max Tokens')
             .setDesc('Maximum length of Claude\'s response (256–8192).')
             .addSlider(slider => slider
-                .setLimits(256, 8192, 256)
+                .setLimits(256, 16384, 256)
                 .setValue(this.plugin.settings.maxTokens)
                 .setDynamicTooltip()
                 .onChange(async (v) => {
