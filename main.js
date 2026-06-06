@@ -163,7 +163,7 @@ class VaultAssistantView extends ItemView {
         this.messages    = [];          // display-only: [{role, content: string}]
         this.apiHistory  = [];          // full API history including tool_use blocks
         this.pendingEdit = null;        // write operation proposed by a tool, awaiting Apply/Discard
-        this.noteCache   = new Map();   // path → content, for dedup reads within a session
+        this.noteCache   = new Map();   // path → { content, ts } — auto-invalidated on modify / TTL
         this.scope       = 'note';
         this.folderPath  = null;
     }
@@ -177,6 +177,12 @@ class VaultAssistantView extends ItemView {
         // Update scope hint whenever the user navigates to a different note
         this.registerEvent(
             this.app.workspace.on('file-open', () => this.updateScopeHint())
+        );
+        // Invalidate cache entry immediately when a file is modified in Obsidian
+        this.registerEvent(
+            this.app.vault.on('modify', (file) => {
+                this.noteCache.delete(file.path);
+            })
         );
     }
 
@@ -419,11 +425,7 @@ class VaultAssistantView extends ItemView {
         if (this.scope === 'note') {
             context += '\n';
             if (active) {
-                // Cache the active note to avoid re-reads
-                if (!this.noteCache.has(active.path)) {
-                    this.noteCache.set(active.path, await vault.read(active));
-                }
-                context += `File: ${active.path}\n---\n${this.noteCache.get(active.path)}\n---\n`;
+                context += `File: ${active.path}\n---\n${await this.cachedRead(active.path)}\n---\n`;
             } else {
                 context += '(No active note open)\n';
             }
@@ -448,6 +450,36 @@ class VaultAssistantView extends ItemView {
         }
 
         return { context, activePath };
+    }
+
+    // ── Note Cache ────────────────────────────────────────────────────────────
+    // Three-layer auto-invalidation:
+    //   1. vault 'modify' event  → instant invalidation when file changes in Obsidian
+    //   2. TTL (10 min)          → safety net for any other stale scenario
+    //   3. Max 50 entries        → prevent memory bloat on large vaults (LRU eviction)
+
+    async cachedRead(filePath) {
+        const CACHE_TTL  = 10 * 60 * 1000; // 10 minutes
+        const CACHE_MAX  = 50;
+
+        const entry = this.noteCache.get(filePath);
+        if (entry && (Date.now() - entry.ts) < CACHE_TTL) {
+            return entry.content; // cache hit
+        }
+
+        // Cache miss or expired — read from disk
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!file || !(file instanceof TFile)) throw new Error(`File not found: ${filePath}`);
+        const content = await this.app.vault.read(file);
+
+        // Evict oldest entry if at capacity
+        if (this.noteCache.size >= CACHE_MAX) {
+            const oldest = this.noteCache.keys().next().value;
+            this.noteCache.delete(oldest);
+        }
+
+        this.noteCache.set(filePath, { content, ts: Date.now() });
+        return content;
     }
 
     // ── Scope Helpers ─────────────────────────────────────────────────────────
@@ -642,14 +674,7 @@ ${context}`;
                 else return `Error: Note not found: "${path}". Check the file list in the context.`;
             }
 
-            // Return cached content if already read this session — avoids paying
-            // for the same content twice in the same conversation
-            if (this.noteCache.has(file.path)) {
-                return `File: ${file.path} [cached — already read this session]\n---\n${this.noteCache.get(file.path)}`;
-            }
-
-            const content = await vault.read(file);
-            this.noteCache.set(file.path, content);
+            const content = await this.cachedRead(file.path);
             return `File: ${file.path}\n---\n${content}`;
         }
 
