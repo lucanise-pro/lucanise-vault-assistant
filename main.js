@@ -160,9 +160,10 @@ class VaultAssistantView extends ItemView {
     constructor(leaf, plugin) {
         super(leaf);
         this.plugin      = plugin;
-        this.messages    = [];   // display-only: [{role, content: string}]
-        this.apiHistory  = [];   // full API history including tool_use blocks
-        this.pendingEdit = null; // write operation proposed by a tool, awaiting Apply/Discard
+        this.messages    = [];          // display-only: [{role, content: string}]
+        this.apiHistory  = [];          // full API history including tool_use blocks
+        this.pendingEdit = null;        // write operation proposed by a tool, awaiting Apply/Discard
+        this.noteCache   = new Map();   // path → content, for dedup reads within a session
         this.scope       = 'note';
         this.folderPath  = null;
     }
@@ -267,17 +268,21 @@ class VaultAssistantView extends ItemView {
         if (this.scope === 'note') {
             this.scopeHintEl.textContent = active ? `📄 ${active.name}` : 'No note open';
         } else if (this.scope === 'folder') {
-            if (!this.folderPath) {
+            if (this.folderPath === null) {
+                // No folder explicitly chosen yet — show active note's parent as a hint
                 this.scopeHintEl.textContent = active?.parent
-                    ? `📁 ${active.parent.path || 'root'}`
+                    ? `📁 ${active.parent.path || 'Vault root'}`
                     : '📁 No folder';
             } else {
+                // folderPath is '' for vault root, or a real path
                 const count = this.app.vault.getMarkdownFiles()
                     .filter(f => this.folderPath === ''
                         ? true
                         : f.path.startsWith(this.folderPath + '/'))
                     .length;
-                this.scopeHintEl.textContent = `📁 ${this.folderPath || 'Vault root'} · ${count} notes`;
+                this.scopeHintEl.textContent = this.folderPath === ''
+                    ? `🗄 Vault root · ${count} notes`
+                    : `📁 ${this.folderPath} · ${count} notes`;
             }
         } else {
             const count = this.app.vault.getMarkdownFiles().length;
@@ -396,37 +401,47 @@ class VaultAssistantView extends ItemView {
 
     async buildContext() {
         const { vault, workspace } = this.app;
-        const active    = workspace.getActiveFile();
+        const active     = workspace.getActiveFile();
         const activePath = active?.path ?? null;
 
-        const scopeLabel = this.scope === 'folder' && this.folderPath
-            ? (this.folderPath.split('/').pop() || 'root')
+        const isFirstTurn = this.apiHistory.length <= 1; // only user msg so far
+
+        const scopeLabel = this.scope === 'folder'
+            ? (this.folderPath === '' ? 'Vault root' : this.folderPath?.split('/').pop() || 'Folder')
             : this.scope.charAt(0).toUpperCase() + this.scope.slice(1);
 
-        let context = `[VAULT SCOPE — ${scopeLabel}]\n`;
-        if (activePath) context += `[ACTIVE NOTE — ${activePath}]\n`;
+        let context = `[SCOPE: ${scopeLabel}]\n`;
+        if (activePath) context += `[ACTIVE NOTE: ${activePath}]\n`;
 
         if (this.scope === 'note') {
-            // Pre-load the active note directly — no tools needed for single-note work
             context += '\n';
             if (active) {
-                const content = await vault.read(active);
-                context += `File: ${active.path}\n---\n${content}\n---\n`;
+                // Cache the active note to avoid re-reads
+                if (!this.noteCache.has(active.path)) {
+                    this.noteCache.set(active.path, await vault.read(active));
+                }
+                context += `File: ${active.path}\n---\n${this.noteCache.get(active.path)}\n---\n`;
             } else {
                 context += '(No active note open)\n';
             }
-        } else {
-            // Folder / Vault — send the file index only.
-            // Claude uses read_note / list_folder / search_notes tools to fetch content on demand.
+        } else if (isFirstTurn) {
+            // First turn: send full file index so Claude knows what exists
             const files = this.getScopedFiles(vault.getMarkdownFiles());
             const sorted = [...files].sort((a, b) => {
                 const da = a.path.split('/').length, db = b.path.split('/').length;
                 if (da !== db) return da - db;
                 return a.path.localeCompare(b.path);
             });
+            const MAX_INDEX = 400;
+            const shown = sorted.slice(0, MAX_INDEX);
             context += `[FILES IN SCOPE — ${sorted.length} note${sorted.length === 1 ? '' : 's'}]\n`;
-            sorted.forEach(f => { context += `  • ${f.path}\n`; });
-            context += '\nUse the read_note tool to fetch a file\'s content, list_folder to explore subfolders, and search_notes to find relevant files by keyword.\n';
+            shown.forEach(f => { context += `  • ${f.path}\n`; });
+            if (sorted.length > MAX_INDEX)
+                context += `  … and ${sorted.length - MAX_INDEX} more (use list_folder to explore)\n`;
+            context += '\nUse read_note to fetch content, list_folder to explore, search_notes to find by keyword.\n';
+        } else {
+            // Subsequent turns: skip the file index — already in conversation history
+            context += '[File index sent at conversation start — use tools to access files.]\n';
         }
 
         return { context, activePath };
@@ -524,7 +539,7 @@ ${context}`;
                     model:      this.plugin.settings.model,
                     max_tokens: this.plugin.settings.maxTokens,
                     system:     systemPrompt,
-                    messages:   this.apiHistory,
+                    messages:   this.getApiMessages(), // compressed for token efficiency
                     tools:      VAULT_TOOLS,
                 }),
                 throw: false,
@@ -631,7 +646,14 @@ ${context}`;
                 else return `Error: Note not found: "${path}". Check the file list in the context.`;
             }
 
+            // Return cached content if already read this session — avoids paying
+            // for the same content twice in the same conversation
+            if (this.noteCache.has(file.path)) {
+                return `File: ${file.path} [cached — already read this session]\n---\n${this.noteCache.get(file.path)}`;
+            }
+
             const content = await vault.read(file);
+            this.noteCache.set(file.path, content);
             return `File: ${file.path}\n---\n${content}`;
         }
 
@@ -741,6 +763,42 @@ ${context}`;
         }
 
         return `Error: Unknown tool "${toolName}".`;
+    }
+
+    // ── API History Compression ───────────────────────────────────────────────
+    // Keeps the last KEEP_FULL_ROUNDS tool exchanges intact; compresses older
+    // read_note results to a short stub so they don't burn tokens in long chats.
+    getApiMessages() {
+        const KEEP_FULL_ROUNDS = 3; // keep last 3 tool-use/result pairs in full
+
+        // Walk backwards and find tool_result messages, counting from newest
+        let toolRoundsSeen = 0;
+        const compressOlder = new Set();
+
+        for (let i = this.apiHistory.length - 1; i >= 0; i--) {
+            const msg = this.apiHistory[i];
+            if (msg.role === 'user' && Array.isArray(msg.content) &&
+                msg.content[0]?.type === 'tool_result') {
+                toolRoundsSeen++;
+                if (toolRoundsSeen > KEEP_FULL_ROUNDS) compressOlder.add(i);
+            }
+        }
+
+        if (compressOlder.size === 0) return this.apiHistory; // nothing to compress
+
+        return this.apiHistory.map((msg, i) => {
+            if (!compressOlder.has(i)) return msg;
+            // Compress read_note results older than KEEP_FULL_ROUNDS
+            const compressed = msg.content.map(block => {
+                if (block.type !== 'tool_result') return block;
+                const text = typeof block.content === 'string' ? block.content : '';
+                if (!text.startsWith('File:')) return block; // not a read result
+                const chars = text.length;
+                const firstLine = text.split('\n')[0];
+                return { ...block, content: `${firstLine} [content omitted — ${chars} chars, re-read if needed]` };
+            });
+            return { ...msg, content: compressed };
+        });
     }
 
     // ── Loading Label ─────────────────────────────────────────────────────────
@@ -966,6 +1024,7 @@ ${context}`;
         this.messages    = [];
         this.apiHistory  = [];
         this.pendingEdit = null;
+        this.noteCache   = new Map();
         if (this.messagesEl) {
             this.messagesEl.empty();
             this.buildEmptyState();
