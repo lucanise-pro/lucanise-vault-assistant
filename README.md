@@ -1,32 +1,66 @@
-# Vault Assistant
+# Lucanise Vault Assistant
 
-> **Read this before installing.** This plugin sends your note content to an external AI service. Understand what it does before you use it.
+> **Your AI thinking partner, living inside Obsidian.**
 
-Chat with Claude AI about your Obsidian notes. Works on Mac, iPhone, and iPad.
+Chat with Claude — Anthropic's most capable AI — directly inside Obsidian. Ask questions about your notes, get summaries, draft new content, rewrite sections, and let Claude edit your vault seamlessly. Works on Mac, iPhone, and iPad.
 
 ---
 
-## What This Plugin Does
+## Why This Plugin Exists
+
+Most AI tools treat your notes as an afterthought — you copy text out, paste it in, copy the result back. That breaks your flow and loses context.
+
+**Lucanise Vault Assistant is different.** Claude has direct access to your vault. It reads what it needs, when it needs it. When it proposes a change, a single tap writes it to your file — no copy-pasting, no broken markdown, no character artefacts. It works the way you'd expect a real AI assistant to work.
+
+Think of it like having a senior editor, researcher, and writing partner available 24/7, who has actually read your notes.
+
+---
+
+## What It Can Do
+
+| Task | Example prompt |
+|---|---|
+| **Summarise** | "Give me a 3-bullet summary of this note" |
+| **Rewrite** | "Rewrite the intro more casually" |
+| **Translate** | "Translate this note to Italian" |
+| **Research across notes** | "What decisions did I make last month?" |
+| **Find connections** | "Which notes mention the project deadline?" |
+| **Extract insights** | "List all action items across my Projects folder" |
+| **Create new notes** | "Create a Weekly Review template and save it" |
+| **Edit existing notes** | "Add a summary section at the top of this note" |
+
+Claude reads your vault on demand — fetching only the files it actually needs, not dumping everything into the prompt at once. This keeps it fast, accurate, and cost-efficient.
+
+---
+
+## Privacy First
+
+> **Read this before installing.** This plugin sends your note content to an external AI service.
+
+- Your note content is sent to **Anthropic's API only** (`api.anthropic.com`, HTTPS) — and only when Claude needs to read it
+- Your **API key** is stored locally at `.obsidian/plugins/lucanise-vault-assistant/data.json` — on your device only, never committed to this repo
+- **No analytics, no telemetry, no third-party services** beyond Anthropic's own API
+- **No data stored remotely** — Anthropic processes your request and returns a response; nothing is retained by this plugin
+- You can revoke your API key at any time at https://console.anthropic.com
+
+---
+
+## How It Works
 
 When you send a message, the plugin:
 
-1. **Sends your message to Anthropic's API** (`api.anthropic.com`) over HTTPS, along with a file index of the notes in scope
-2. **Claude reads files on demand** — using built-in vault tools, Claude fetches only the notes it actually needs to answer your question
-3. **Receives Claude's response** and displays it in the chat panel
-4. **Proposes edits** as a confirmation card — you tap Apply and the file is saved seamlessly, with no character artefacts
+1. **Reads the scope you selected** — the active note, a folder, or your entire vault
+2. **Sends your message + a file index to Claude** — Claude decides which notes to actually open
+3. **Claude uses vault tools on demand** — reading, searching, and writing files as needed
+4. **Proposes edits as a confirmation card** — you review and tap Apply; the file is saved instantly with correct markdown
 
-No data is stored remotely. No server is involved other than Anthropic's own API. The plugin does not phone home, track usage, or send any telemetry.
-
-Your **Anthropic API key** is stored locally in your vault at:
-`.obsidian/plugins/lucanise-vault-assistant/data.json`
-
-This file stays on your device (and in your iCloud if your vault is iCloud-synced). It is **never committed to this repository** — `data.json` is in `.gitignore`.
+No round-trips. No broken formatting. No copy-pasting.
 
 ---
 
 ## Installation
 
-### Mac (direct) — assuming your vault is in iCloud
+### Mac — assuming your vault is in iCloud
 
 1. In Finder, go to your vault folder → `.obsidian/plugins/`
 2. Create a folder named `lucanise-vault-assistant`
@@ -35,12 +69,12 @@ This file stays on your device (and in your iCloud if your vault is iCloud-synce
 
 ### iPhone / iPad (via iCloud)
 
-1. On your Mac, open **Files** or **Finder** and navigate to:
+1. On your Mac, open **Finder** and navigate to:
    `iCloud Drive / Obsidian / YourVaultName / .obsidian / plugins /`
-   > The `.obsidian` folder is hidden — in Finder press `Cmd+Shift+.` to show hidden files
+   > The `.obsidian` folder is hidden — press `Cmd+Shift+.` to show hidden files
 2. Create a folder named `lucanise-vault-assistant` inside `plugins/`
 3. Copy `main.js`, `manifest.json`, and `styles.css` into it
-4. Wait for iCloud to sync (a few seconds)
+4. Wait for iCloud to sync (a few seconds to a minute)
 5. On your iPhone/iPad: open Obsidian → Settings → Community Plugins
 6. Toggle **Safe Mode** off if prompted, then enable **Lucanise Vault Assistant**
 7. Tap the chat bubble icon in the toolbar to open the panel
@@ -52,114 +86,92 @@ This file stays on your device (and in your iCloud if your vault is iCloud-synce
 1. Go to **Settings → Lucanise Vault Assistant**
 2. Paste your Anthropic API key (`sk-ant-...`)
    Get one at: https://console.anthropic.com
-3. Choose a model — fetched live from Anthropic each time you open settings
-   - **Opus** — most powerful, best for complex writing and cross-note analysis
-   - **Sonnet** — recommended balance of quality and speed
-   - **Haiku** — fastest and cheapest, good for quick questions
-4. Set **Max Tokens** — default 8192, raise if edits are cut short on large notes
-5. Optionally set a **Saved Notes Folder** for Claude-created notes
+3. Choose a model — fetched live from Anthropic each time you open settings:
+   - **Opus** — most powerful; best for complex writing, deep analysis, cross-note synthesis
+   - **Sonnet** — recommended; excellent balance of quality, speed, and cost *(default)*
+   - **Haiku** — fastest and cheapest; great for quick questions and simple edits
+4. Set **Max Tokens** — default 8192; raise to 16384 if edits are cut short on large notes
+5. Optionally set a **Saved Notes Folder** for notes created by Claude
 
 ---
 
-## How to Use
+## Using the Plugin
 
 Open the panel via the ribbon icon or Command Palette (`Open Vault Assistant`).
 
-### Scope selector
+### Scope — your working directory
 
-The **scope** at the top works like a working directory — it tells Claude which part of your vault to operate in:
+The **scope selector** at the top tells Claude which part of your vault to operate in. Think of it like a working directory in a terminal.
 
 | Scope | What Claude can access |
 |---|---|
-| **Note** | The currently open note (pre-loaded) |
-| **Folder ▾** | All notes inside the selected folder and its subfolders |
+| **Note** | The currently open note — pre-loaded and ready |
+| **Folder ▾** | All notes inside a selected folder and its subfolders |
 | **Vault** | Your entire vault |
 
-For Folder and Vault scope, Claude receives a file index and fetches specific notes on demand using tools. You will see a live status like *"Reading filename.md…"* or *"Searching notes…"* while Claude is working.
-
-### What Claude can do
-
-- Summarise, analyse, rewrite, translate, extend, or restructure any note
-- Search across notes for a topic, then synthesise an answer
-- Compare multiple notes and spot connections
-- Extract action items, decisions, or themes
-- Create new notes or reorganise existing ones
-- Answer questions grounded in your actual vault content
-
-### Example prompts
-
-- "Summarise this note in 3 bullet points"
-- "Rewrite the intro more casually"
-- "What are all my action items across the Projects folder?"
-- "Find every note that mentions the word budget and summarise them"
-- "Create a new note called Weekly Review with a template"
-- "Translate this note to Italian"
-- "What decisions did I make last month?" *(Vault scope)*
+For Folder and Vault scope, Claude receives a full file index and fetches notes on demand. You'll see live status like *"Reading meeting-notes.md…"* or *"Searching notes…"* while Claude works.
 
 ### Edit proposals
 
-When Claude proposes creating or editing a note, a **proposal card** appears:
+When Claude proposes creating or editing a note, a **proposal card** appears inline in the chat:
 
 ```
-✏️ Edit: meeting-notes.md
-"Rewrote introduction for clarity"
-┌────────────────────────────┐
-│ # Meeting Notes            │  ← tap to expand preview
-│ New content here...        │
-└────────────────────────────┘
-[Apply]  [Discard]
+✏️  Edit: meeting-notes.md
+    "Rewrote introduction for clarity"
+┌────────────────────────────────┐
+│ # Meeting Notes                │  ← tap to expand preview
+│ Revised content here...        │
+└────────────────────────────────┘
+  [Apply]  [Discard]
 ```
 
-- **Tap the preview** to expand and see more content before deciding
-- **Apply** → writes the change to your vault instantly, with correct markdown
-- **Discard** → ignores it
+- **Tap the preview** to expand and read the full proposed content before deciding
+- **Apply** → writes the file instantly, with clean markdown — no artefacts
+- **Discard** → ignores the proposal, nothing is changed
 
-### Standard response actions
+### Response actions
 
-- **New note** → saves Claude's reply as a new `.md` file
+Every Claude response also has three quick actions:
+
+- **New note** → saves the reply as a new `.md` file in your vault
 - **Append** → appends it to the bottom of the currently open note
-- **Copy** → copies the reply text to the clipboard
+- **Copy** → copies the text to your clipboard
 
 ---
 
-## Privacy & Security
+## Token Efficiency & Caching
 
-- Your API key is stored locally in `.obsidian/plugins/lucanise-vault-assistant/data.json` — on your device only
-- `data.json` is excluded from this repository via `.gitignore` — it will never be committed or published
-- No analytics, no telemetry, no third-party services beyond Anthropic's API
-- The only network call is directly to `api.anthropic.com`
-- Note content is sent to Anthropic only when Claude actually needs to read it (on-demand via tools)
-- Delete operations always require explicit confirmation
-- You can revoke your API key at any time at https://console.anthropic.com
+The plugin is designed to be as cost-efficient as possible:
 
----
+- **Prompt caching** — the system prompt is cached automatically. From the second turn onwards, system prompt tokens cost ~80% less
+- **On-demand reads** — Claude only reads the files it actually needs, not your whole vault upfront
+- **Sliding window** — older turns are compressed to keep conversation context lean without losing important history
+- **Note cache** — recently read notes are cached in-session so Claude doesn't re-fetch the same file repeatedly
 
-## Note Cache
-
-The plugin caches note reads within a session for token efficiency. The cache auto-invalidates:
-
+The note cache auto-invalidates:
 - **Immediately** when a file is modified in Obsidian
-- **After 10 minutes** (TTL safety net)
+- **After 10 minutes** (TTL safety net for files changed by external apps or sync)
 - **At 50 entries max** (LRU eviction)
 
-You can also clear it manually via **Settings → Clear Note Cache**.
+You can also clear it manually via **Settings → Clear Note Cache** if Claude seems to be reading stale content.
 
 ---
 
-## Notes
+## Notes & Known Behaviour
 
-- On iOS, after installing or updating the plugin, close and reopen Obsidian to activate it
-- The plugin uses the Obsidian mobile API — no Node.js or Electron dependencies
-- Tool calls (read, list, search, edit, create) count toward your Anthropic API usage
-- Prompt caching is enabled automatically — subsequent turns in a conversation cost ~80% less on system prompt tokens
+- On **iOS/iPadOS**, after installing or updating the plugin, close and reopen Obsidian fully to activate it
+- The plugin uses the **Obsidian mobile API** — no Node.js or Electron dependencies, works natively on iPhone and iPad
+- **Tool calls** (read, list, search, edit, create) each count as API usage toward your Anthropic account
+- The plugin does **not** access the internet except to call `api.anthropic.com`
+- Delete operations always require your explicit confirmation before executing
 
 ---
 
 ## Contributing & Repository Policy
 
-This repository is **public for transparency** — so you can read the source code and verify exactly what the plugin does.
+This repository is **public for transparency** — so you can read the source code and verify exactly what the plugin does with your data.
 
-**However, this is a personal project with no external contributions accepted.**
+**This is a personal project. External contributions are not accepted.**
 
 - Pull requests will not be reviewed or merged
 - Issues may be read but responses are not guaranteed
