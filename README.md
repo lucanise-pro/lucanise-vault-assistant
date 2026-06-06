@@ -11,9 +11,9 @@ Chat with Claude AI about your Obsidian notes. Works on Mac, iPhone, and iPad.
 When you send a message, the plugin:
 
 1. **Sends your message to Anthropic's API** (`api.anthropic.com`) over HTTPS, along with a file index of the notes in scope
-2. **Claude reads files on demand** — using built-in vault tools, Claude fetches only the notes it actually needs to answer your question, rather than sending everything at once
+2. **Claude reads files on demand** — using built-in vault tools, Claude fetches only the notes it actually needs to answer your question
 3. **Receives Claude's response** and displays it in the chat panel
-4. Optionally **writes back to your vault** if you ask Claude to create or edit a note and you confirm by tapping **Apply**
+4. **Proposes edits** as a confirmation card — you tap Apply and the file is saved seamlessly, with no character artefacts
 
 No data is stored remotely. No server is involved other than Anthropic's own API. The plugin does not phone home, track usage, or send any telemetry.
 
@@ -52,12 +52,12 @@ This file stays on your device (and in your iCloud if your vault is iCloud-synce
 1. Go to **Settings → Lucanise Vault Assistant**
 2. Paste your Anthropic API key (`sk-ant-...`)
    Get one at: https://console.anthropic.com
-3. Choose a model — the list is fetched live from Anthropic each time you open settings
+3. Choose a model — fetched live from Anthropic each time you open settings
    - **Opus** — most powerful, best for complex writing and cross-note analysis
    - **Sonnet** — recommended balance of quality and speed
    - **Haiku** — fastest and cheapest, good for quick questions
-4. Adjust max tokens if needed (default 2048 is fine for most tasks)
-5. Optionally set a **Saved Notes Folder** where new notes created by Claude will be placed
+4. Set **Max Tokens** — default 8192, raise if edits are cut short on large notes
+5. Optionally set a **Saved Notes Folder** for Claude-created notes
 
 ---
 
@@ -71,15 +71,15 @@ The **scope** at the top works like a working directory — it tells Claude whic
 
 | Scope | What Claude can access |
 |---|---|
-| **Note** | The currently open note (content pre-loaded) |
-| **Folder** | All notes inside the selected folder and its subfolders |
+| **Note** | The currently open note (pre-loaded) |
+| **Folder ▾** | All notes inside the selected folder and its subfolders |
 | **Vault** | Your entire vault |
 
-For Folder and Vault scope, Claude receives a file index and then **reads specific notes on demand** using built-in tools. You will see a live status like *"Reading filename.md…"* or *"Searching notes…"* while Claude is working.
+For Folder and Vault scope, Claude receives a file index and fetches specific notes on demand using tools. You will see a live status like *"Reading filename.md…"* or *"Searching notes…"* while Claude is working.
 
 ### What Claude can do
 
-- Summarise, analyse, rewrite, translate, or extend any note
+- Summarise, analyse, rewrite, translate, extend, or restructure any note
 - Search across notes for a topic, then synthesise an answer
 - Compare multiple notes and spot connections
 - Extract action items, decisions, or themes
@@ -91,21 +91,34 @@ For Folder and Vault scope, Claude receives a file index and then **reads specif
 - "Summarise this note in 3 bullet points"
 - "Rewrite the intro more casually"
 - "What are all my action items across the Projects folder?"
-- "Find every note that mentions the word budget"
+- "Find every note that mentions the word budget and summarise them"
 - "Create a new note called Weekly Review with a template"
 - "Translate this note to Italian"
-- "What decisions did I make last month?" *(with Vault scope)*
+- "What decisions did I make last month?" *(Vault scope)*
 
-### After a response
+### Edit proposals
+
+When Claude proposes creating or editing a note, a **proposal card** appears:
+
+```
+✏️ Edit: meeting-notes.md
+"Rewrote introduction for clarity"
+┌────────────────────────────┐
+│ # Meeting Notes            │  ← tap to expand preview
+│ New content here...        │
+└────────────────────────────┘
+[Apply]  [Discard]
+```
+
+- **Tap the preview** to expand and see more content before deciding
+- **Apply** → writes the change to your vault instantly, with correct markdown
+- **Discard** → ignores it
+
+### Standard response actions
 
 - **New note** → saves Claude's reply as a new `.md` file
 - **Append** → appends it to the bottom of the currently open note
 - **Copy** → copies the reply text to the clipboard
-
-### If Claude proposes an edit
-
-- **Apply → filename.md** → writes the change to your vault immediately
-- **Discard** → ignores it
 
 ---
 
@@ -115,9 +128,21 @@ For Folder and Vault scope, Claude receives a file index and then **reads specif
 - `data.json` is excluded from this repository via `.gitignore` — it will never be committed or published
 - No analytics, no telemetry, no third-party services beyond Anthropic's API
 - The only network call is directly to `api.anthropic.com`
-- Note content is sent to Anthropic only when Claude actually needs to read it (on-demand, not all at once)
+- Note content is sent to Anthropic only when Claude actually needs to read it (on-demand via tools)
 - Delete operations always require explicit confirmation
 - You can revoke your API key at any time at https://console.anthropic.com
+
+---
+
+## Note Cache
+
+The plugin caches note reads within a session for token efficiency. The cache auto-invalidates:
+
+- **Immediately** when a file is modified in Obsidian
+- **After 10 minutes** (TTL safety net)
+- **At 50 entries max** (LRU eviction)
+
+You can also clear it manually via **Settings → Clear Note Cache**.
 
 ---
 
@@ -125,7 +150,8 @@ For Folder and Vault scope, Claude receives a file index and then **reads specif
 
 - On iOS, after installing or updating the plugin, close and reopen Obsidian to activate it
 - The plugin uses the Obsidian mobile API — no Node.js or Electron dependencies
-- Each tool call (read, list, search) counts toward your Anthropic API usage
+- Tool calls (read, list, search, edit, create) count toward your Anthropic API usage
+- Prompt caching is enabled automatically — subsequent turns in a conversation cost ~80% less on system prompt tokens
 
 ---
 
